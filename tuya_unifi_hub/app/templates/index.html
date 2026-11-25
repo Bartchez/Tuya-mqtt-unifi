@@ -19,6 +19,13 @@
         .mapped-badge { font-size: 0.75rem; }
         tr.clickable-row:hover { background: #eef5ff; cursor: pointer; }
         .table-match th, .table-match td { vertical-align: middle; }
+        th.sortable { cursor: pointer; user-select: none; white-space: nowrap; transition: background-color 0.15s; }
+        th.sortable:hover { background-color: #e7f1ff !important; color: #0d6efd; }
+        .sort-icon { font-size: 0.78rem; margin-left: 4px; opacity: 0.45; }
+        .sort-icon.active { opacity: 1; color: #0d6efd; }
+        tr.row-bound > td { background-color: #eefbf3 !important; }
+        tr.row-bound:hover > td { background-color: #dff7e8 !important; }
+        tr.row-bound > td:first-child { box-shadow: inset 4px 0 0 #198754; }
     </style>
 </head>
 <body>
@@ -92,13 +99,13 @@
                         <table class="table table-hover table-match align-middle">
                             <thead class="table-light">
                                 <tr>
-                                    <th>Nazwa Tuya</th>
+                                    <th class="sortable" onclick="toggleSort('matches', 'name')">Nazwa Tuya <i id="sort-matches-name" class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th>Tuya Device ID</th>
                                     <th>Typ / Kategoria</th>
                                     <th>Adres z chmury Tuya</th>
-                                    <th>Wymuszony Lokalny IP</th>
+                                    <th class="sortable" onclick="toggleSort('matches', 'local_ip')">Wymuszony Lokalny IP <i id="sort-matches-local_ip" class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th>Adres MAC (UniFi/LAN)</th>
-                                    <th>Status powiązania</th>
+                                    <th class="sortable" onclick="toggleSort('matches', 'status')">Status powiązania <i id="sort-matches-status" class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th class="text-end">Akcje i narzędzia</th>
                                 </tr>
                             </thead>
@@ -129,8 +136,8 @@
                         <table class="table table-hover align-middle">
                             <thead class="table-light">
                                 <tr>
-                                    <th>Nazwa / ID</th>
-                                    <th>Adres IP &amp; MAC</th>
+                                    <th class="sortable" onclick="toggleSort('devices', 'name')">Nazwa / ID <i id="sort-devices-name" class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th class="sortable" onclick="toggleSort('devices', 'ip')">Adres IP &amp; MAC <i id="sort-devices-ip" class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th>Klucz Local Key</th>
                                     <th>Parametry DPS (podgląd)</th>
                                     <th>Akcje</th>
@@ -161,10 +168,10 @@
                         <table class="table table-striped align-middle">
                             <thead>
                                 <tr>
-                                    <th>Urządzenie</th>
+                                    <th class="sortable" onclick="toggleSort('mappings', 'device_name')">Urządzenie <i id="sort-mappings-device_name" class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th>Punkt Tuya (DPS)</th>
                                     <th>Typ encji MQTT</th>
-                                    <th>Nazwa encji</th>
+                                    <th class="sortable" onclick="toggleSort('mappings', 'entity_name')">Nazwa encji <i id="sort-mappings-entity_name" class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th>Status w HA</th>
                                     <th>Akcje</th>
                                 </tr>
@@ -606,6 +613,60 @@
     let networkClientsCache = [];
     let currentBindDeviceId = null;
 
+    // Stan sortowania dla wszystkich 3 zakładek
+    const sortState = {
+        matches:  { key: null, dir: 1 },
+        devices:  { key: null, dir: 1 },
+        mappings: { key: null, dir: 1 }
+    };
+
+    function ipToSortableNum(ip) {
+        if (!ip || ip === "-") return null;
+        const parts = String(ip).trim().split(".");
+        if (parts.length !== 4) return null;
+        const nums = parts.map(p => parseInt(p, 10));
+        if (nums.some(n => isNaN(n) || n < 0 || n > 255)) return null;
+        return ((nums[0] * 256 + nums[1]) * 256 + nums[2]) * 256 + nums[3];
+    }
+
+    function compareIp(a, b, dir) {
+        const na = ipToSortableNum(a);
+        const nb = ipToSortableNum(b);
+        if (na === null && nb === null) return 0;
+        if (na === null) return 1;  // puste IP zawsze na dole
+        if (nb === null) return -1;
+        return (na - nb) * dir;
+    }
+
+    function updateSortIcons(tableName) {
+        const st = sortState[tableName];
+        document.querySelectorAll(`[id^="sort-${tableName}-"]`).forEach(el => {
+            el.className = "bi bi-arrow-down-up sort-icon";
+        });
+        if (st.key) {
+            const activeEl = document.getElementById(`sort-${tableName}-${st.key}`);
+            if (activeEl) {
+                activeEl.className = st.dir === 1
+                    ? "bi bi-sort-up sort-icon active"
+                    : "bi bi-sort-down sort-icon active";
+            }
+        }
+    }
+
+    function toggleSort(tableName, key) {
+        const st = sortState[tableName];
+        if (st.key === key) {
+            st.dir = st.dir * -1;
+        } else {
+            st.key = key;
+            st.dir = 1;
+        }
+        updateSortIcons(tableName);
+        if (tableName === "matches") renderMatchesTable();
+        else if (tableName === "devices") renderDevicesTable();
+        else if (tableName === "mappings") renderMappingsTable();
+    }
+
     let deviceModalObj = null;
     let mappingModalObj = null;
     let unifiIpModalObj = null;
@@ -681,20 +742,35 @@
 
         let matchedCount = 0;
 
-        for (const item of matchesCache) {
-            const isMatched = item.local_ip && item.local_ip !== "-";
+        const sortedMatches = [...matchesCache];
+        const st = sortState.matches;
+        if (st.key === "name") {
+            sortedMatches.sort((a, b) => (a.name || "").localeCompare(b.name || "", "pl", { sensitivity: "base" }) * st.dir);
+        } else if (st.key === "local_ip") {
+            sortedMatches.sort((a, b) => compareIp(a.local_ip, b.local_ip, st.dir));
+        } else if (st.key === "status") {
+            sortedMatches.sort((a, b) => (a.status || "").localeCompare(b.status || "", "pl", { sensitivity: "base" }) * st.dir);
+        }
+
+        for (const item of sortedMatches) {
+            const isMatched = Boolean(item.local_ip && item.local_ip !== "-");
             if (isMatched) matchedCount++;
 
             let statusBadge = "bg-secondary";
-            if (item.status.includes("stały IP")) statusBadge = "bg-success";
-            else if (item.status.includes("Wymuszony")) statusBadge = "bg-primary";
-            else if (item.status.includes("automatycznie")) statusBadge = "bg-info text-dark";
-            else if (item.status.includes("Ręcznie")) statusBadge = "bg-warning text-dark";
+            const stLow = (item.status || "").toLowerCase();
+            if (stLow.includes("stały ip")) statusBadge = "bg-success";
+            else if (stLow.includes("wymuszony")) statusBadge = "bg-primary";
+            else if (stLow.includes("automatycznie")) statusBadge = "bg-info text-dark";
+            else if (stLow.includes("ręcznie") || stLow.includes("recznie")) statusBadge = "bg-warning text-dark";
 
             const tr = document.createElement("tr");
+            if (isMatched) tr.className = "row-bound";
+            const boundIcon = isMatched
+                ? `<i class="bi bi-check-circle-fill text-success me-1" title="Urządzenie powiązane"></i>`
+                : `<i class="bi bi-circle text-muted me-1" title="Niepowiązane"></i>`;
             tr.innerHTML = `
                 <td>
-                    <strong>${item.name || 'Tuya Device'}</strong>
+                    ${boundIcon}<strong>${item.name || 'Tuya Device'}</strong>
                 </td>
                 <td><small class="font-monospace text-muted">${item.device_id}</small></td>
                 <td><span class="badge bg-light text-dark border">${item.category}${item.is_sub ? ' (Zigbee)' : ' (Wi-Fi)'}</span></td>
@@ -979,8 +1055,16 @@
             return;
         }
 
+        const dst = sortState.devices;
+        if (dst.key === "name") {
+            keys.sort((a, b) => ((devicesCache[a].name || a)).localeCompare((devicesCache[b].name || b), "pl", { sensitivity: "base" }) * dst.dir);
+        } else if (dst.key === "ip") {
+            keys.sort((a, b) => compareIp(devicesCache[a].ip, devicesCache[b].ip, dst.dir));
+        }
+
         for (const devId of keys) {
             const dev = devicesCache[devId];
+            const isBound = Boolean(dev.ip && dev.ip !== "-");
             const dpsEntries = dev.dps ? Object.entries(dev.dps) : [];
 
             let dpsHtml = "";
@@ -1003,9 +1087,13 @@
             }
 
             const tr = document.createElement("tr");
+            if (isBound) tr.className = "row-bound";
+            const boundIcon = isBound
+                ? `<i class="bi bi-check-circle-fill text-success me-1" title="Przypisane lokalne IP"></i>`
+                : `<i class="bi bi-circle text-muted me-1" title="Brak lokalnego IP"></i>`;
             tr.innerHTML = `
                 <td>
-                    <strong>${dev.name || 'Tuya Device'}</strong><br>
+                    ${boundIcon}<strong>${dev.name || 'Tuya Device'}</strong><br>
                     <small class="text-muted font-monospace">${devId}</small>
                 </td>
                 <td>
@@ -1316,6 +1404,16 @@
         if (keys.length === 0) {
             tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-muted">Brak mapowań. Kliknij "Nowe mapowanie".</td></tr>`;
             return;
+        }
+        const mst = sortState.mappings;
+        if (mst.key === "device_name") {
+            keys.sort((a, b) => {
+                const da = (devicesCache[mappingsCache[a].device_id]?.name || mappingsCache[a].device_id || "");
+                const db = (devicesCache[mappingsCache[b].device_id]?.name || mappingsCache[b].device_id || "");
+                return da.localeCompare(db, "pl", { sensitivity: "base" }) * mst.dir;
+            });
+        } else if (mst.key === "entity_name") {
+            keys.sort((a, b) => (mappingsCache[a].entity_name || "").localeCompare(mappingsCache[b].entity_name || "", "pl", { sensitivity: "base" }) * mst.dir);
         }
         for (const mapId of keys) {
             const m = mappingsCache[mapId];
