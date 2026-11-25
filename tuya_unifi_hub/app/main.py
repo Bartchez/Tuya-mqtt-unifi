@@ -1,6 +1,7 @@
 ﻿import os
 import time
 import logging
+import threading
 from typing import Dict, Any, List
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response
@@ -262,16 +263,23 @@ async def create_mapping(req: Request):
     mqtt_service.publish_discovery(topic, cfg)
     mqtt_service.register_command_handler(dev_id, on_mqtt_command)
 
-    # Spróbuj pobrać świeży stan przez LAN, a jeśli się nie uda użyj cache
-    fresh_dps = tuya_local.poll_device_status(dev_id)
-    if fresh_dps:
-        on_local_status_update(dev_id, fresh_dps)
-    else:
-        dps_cache = dev.get("dps", {})
-        dps_k = str(body["dps_key"])
-        val = TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
-        if val is not None:
-            mqtt_service.publish_mapped_value(dev_id, dps_k, val)
+    # Natychmiast wyślij ostatnią znaną wartość z cache (nie blokuj odpowiedzi HTTP)
+    dps_cache = dev.get("dps", {}) or {}
+    dps_k = str(body["dps_key"])
+    val = TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
+    if val is not None:
+        mqtt_service.publish_mapped_value(dev_id, dps_k, val)
+
+    # W tle odpytaj urządzenie przez LAN, aby zaktualizować świeżą wartością
+    def _bg_poll(target_dev_id: str):
+        try:
+            fresh_dps = tuya_local.poll_device_status(target_dev_id)
+            if fresh_dps:
+                on_local_status_update(target_dev_id, fresh_dps)
+        except Exception as bg_err:
+            logger.debug(f"Blad odpytywania w tle dla {target_dev_id}: {bg_err}")
+
+    threading.Thread(target=_bg_poll, args=(dev_id,), daemon=True).start()
 
     return {"status": "ok"}
 

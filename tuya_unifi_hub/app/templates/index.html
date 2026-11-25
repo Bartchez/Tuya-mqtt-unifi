@@ -564,7 +564,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
-                <button type="button" class="btn btn-success" onclick="saveNewMapping()"><i class="bi bi-broadcast"></i> Zapisz i opublikuj w HA</button>
+                <button type="button" id="btn-save-mapping" class="btn btn-success" onclick="saveNewMapping()"><i class="bi bi-broadcast"></i> Zapisz i opublikuj w HA</button>
             </div>
         </div>
     </div>
@@ -1513,6 +1513,12 @@
         const unit = document.getElementById("map_unit").value.trim();
         if (!devId || !dps || !comp || !name) { alert("Wypełnij wymagane pola!"); return; }
         const mapId = editId ? editId : `${devId}_${dps}_${comp}`;
+        const saveBtn = document.getElementById("btn-save-mapping");
+        const origHtml = saveBtn ? saveBtn.innerHTML : "";
+        if (saveBtn) {
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Zapisywanie...`;
+        }
         try {
             const res = await fetch(api("/api/mappings"), {
                 method: "POST",
@@ -1527,6 +1533,11 @@
             await refreshMappings();
         } catch (err) {
             alert("Błąd połączenia podczas zapisu mapowania: " + err.message);
+        } finally {
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = origHtml;
+            }
         }
     }
 

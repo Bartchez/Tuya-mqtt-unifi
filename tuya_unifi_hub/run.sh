@@ -1,7 +1,7 @@
 #!/usr/bin/with-contenv bashio
 set -e
 
-bashio::log.info "Uruchamianie Tuya UniFi Hub v2.0.7..."
+bashio::log.info "Uruchamianie Tuya UniFi Hub v2.0.8..."
 
 mkdir -p /data/tuya_bridge
 export DATA_DIR="/data/tuya_bridge"
