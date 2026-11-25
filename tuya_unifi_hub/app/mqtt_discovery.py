@@ -27,27 +27,28 @@ class MQTTDiscoveryBuilder:
         
         base_topic = f"tuya_esp/{device_id}"
         lwt_topic = "tuya_esp/status"
-        dev_identifier = f"tuya_local_{device_id}_{dps_key}"
+        dev_identifier = f"tuya_local_{device_id}"
 
         unique_id = f"tuya_{device_id}_map_{dps_key}"
         discovery_topic = f"homeassistant/{component}/{unique_id}/config"
         state_topic = f"{base_topic}/mapped/{dps_key}"
         cmd_topic = f"{base_topic}/set/{dps_key}"
 
-        # Zawsze priorytetowo używaj nazwy nadanej podczas mapowania ("Nazwa wyświetlana encji w HA")
-        effective_name = (dps_name or "").strip() or (device_name or "").strip() or f"Tuya {device_id}"
+        # Nazwa urządzenia (grupuje wiele właściwości/encji pod jednym urządzeniem w MQTT)
+        dev_name = (device_name or "").strip() or f"Tuya {device_id}"
+        # Nazwa konkretnej właściwości (encji) wewnątrz tego urządzenia
+        entity_display_name = (dps_name or "").strip() or f"{dev_name} {dps_key}"
         proto_ver = extra_options.get("version", "3.3")
 
         device_info = {
             "identifiers": [dev_identifier],
-            "name": effective_name,
+            "name": dev_name,
             "manufacturer": "Tuya->Mqtt (ESP32-S3)",
             "model": f"Wi-Fi v{proto_ver}"
         }
 
         config = {
-            "name": effective_name,
-            "has_entity_name": False,
+            "name": entity_display_name,
             "unique_id": unique_id,
             "state_topic": state_topic,
             "availability_topic": lwt_topic,

@@ -105,7 +105,7 @@ def publish_all_mappings():
             topic, cfg = MQTTDiscoveryBuilder.build_config(
                 component=m["component"],
                 device_id=m["device_id"],
-                device_name=entity_name or dev.get("name", m["device_id"]),
+                device_name=dev.get("name", m["device_id"]),
                 dps_key=str(m["dps_key"]),
                 dps_name=entity_name,
                 extra_options=extra
@@ -247,10 +247,6 @@ async def create_mapping(req: Request):
     Storage.save_mappings(mappings)
 
     dev = devices.get(dev_id, {})
-    if entity_name:
-        dev["name"] = entity_name
-        devices[dev_id] = dev
-        Storage.save_devices(devices)
 
     extra = dict(body.get("extra", {}) or {})
     extra["version"] = dev.get("version", "3.3")
@@ -258,7 +254,7 @@ async def create_mapping(req: Request):
     topic, cfg = MQTTDiscoveryBuilder.build_config(
         component=body["component"],
         device_id=dev_id,
-        device_name=entity_name or dev.get("name", dev_id),
+        device_name=dev.get("name", dev_id),
         dps_key=str(body["dps_key"]),
         dps_name=entity_name,
         extra_options=extra
@@ -342,7 +338,7 @@ async def test_mapping(map_id: str):
     discovery_topic, cfg = MQTTDiscoveryBuilder.build_config(
         component=m["component"],
         device_id=dev_id,
-        device_name=entity_name or dev.get("name", dev_id),
+        device_name=dev.get("name", dev_id),
         dps_key=dps_k,
         dps_name=entity_name,
         extra_options=extra
@@ -372,6 +368,7 @@ async def test_mapping(map_id: str):
         "state_topic": cfg.get("state_topic"),
         "discovery_topic": discovery_topic,
         "broker_device_name": cfg.get("device", {}).get("name"),
+        "broker_entity_name": cfg.get("name"),
         "all_dps": active_dps,
     }
 
