@@ -112,7 +112,8 @@ class TuyaLocalManager:
                     try:
                         gw = tinytuya.Device(dev_id, ip, local_key)
                         gw.set_version(version)
-                        gw.set_socketTimeout(2.0)
+                        gw.set_socketTimeout(1.5)
+                        gw.set_socketRetryLimit(1)
                         gw.set_socketPersistent(False)
                         gateways[dev_id] = gw
                         self.device_clients[dev_id] = gw
@@ -153,7 +154,8 @@ class TuyaLocalManager:
                     try:
                         d = tinytuya.OutletDevice(dev_id, ip, local_key)
                         d.set_version(version)
-                        d.set_socketTimeout(2.0)
+                        d.set_socketTimeout(1.5)
+                        d.set_socketRetryLimit(1)
                         d.set_socketPersistent(False)
                         self.device_clients[dev_id] = d
                     except Exception as e:
@@ -195,47 +197,66 @@ class TuyaLocalManager:
             logger.error(f"Blad wysylania komendy do {device_id}: {e}")
             return False
 
-    def poll_device_status(self, device_id: str) -> dict:
-        client = self.device_clients.get(device_id)
-        if not client:
-            return {}
+    @staticmethod
+    def _is_port_open(ip: str, port: int = 6668, timeout: float = 1.0) -> bool:
         try:
-            client.set_socketTimeout(2.0)
-            data = client.status()
-            if data and isinstance(data, dict) and "dps" in data and data["dps"]:
-                return data["dps"]
-        except Exception as e:
-            logger.debug(f"Odpytanie {device_id} (domyslna wersja) zakonczone bledem: {e}")
+            with socket.create_connection((ip, port), timeout=timeout):
+                return True
+        except Exception:
+            return False
 
-        # Auto-detekcja wersji protokołu dla urządzeń Wi-Fi (np. czujniki v3.4 / v3.5 / v3.1)
+    def poll_device_status(self, device_id: str) -> dict:
         info = self.devices.get(device_id, {})
         ip = info.get("ip")
         local_key = info.get("local_key")
         node_id = info.get("node_id")
-        if ip and local_key and not node_id:
-            try:
-                current_ver = float(info.get("version", 3.3))
-            except (ValueError, TypeError):
-                current_ver = 3.3
 
-            for v in [3.4, 3.3, 3.5, 3.1]:
-                if abs(v - current_ver) < 0.01:
-                    continue
-                try:
-                    client.set_version(v)
-                    client.set_socketTimeout(2.0)
-                    data = client.status()
-                    if data and isinstance(data, dict) and "dps" in data and data["dps"]:
+        # Urządzenia podbramkowe (Zigbee/BLE) używają klienta z parent gateway
+        if node_id:
+            client = self.device_clients.get(device_id)
+            if not client:
+                return {}
+            try:
+                client.set_socketTimeout(1.5)
+                client.set_socketRetryLimit(1)
+                data = client.status()
+                if data and isinstance(data, dict) and "dps" in data and data["dps"]:
+                    return data["dps"]
+            except Exception as e:
+                logger.debug(f"Odpytanie sub-device {device_id} zakonczone bledem: {e}")
+            return {}
+
+        if not ip or not local_key:
+            return {}
+
+        # Szybki test portu 6668 (1s) zamiast długiego timeoutu tinytuya
+        if not self._is_port_open(ip, 6668, timeout=1.0):
+            return {}
+
+        try:
+            current_ver = float(info.get("version", 3.3))
+        except (ValueError, TypeError):
+            current_ver = 3.3
+
+        versions_to_try = [current_ver, 3.4, 3.3, 3.5, 3.1]
+        seen = set()
+        versions_to_try = [v for v in versions_to_try if not (v in seen or seen.add(v))]
+
+        for v in versions_to_try:
+            try:
+                d = tinytuya.OutletDevice(device_id, ip, local_key)
+                d.set_version(float(v))
+                d.set_socketTimeout(1.5)
+                d.set_socketRetryLimit(1)
+                d.set_socketPersistent(False)
+                data = d.status()
+                if data and isinstance(data, dict) and "dps" in data and data["dps"]:
+                    if abs(v - current_ver) >= 0.01:
                         logger.info(f"Auto-wykryto wersje protokolu v{v} dla {device_id} ({ip})!")
                         info["version"] = str(v)
                         if self.on_version_detected:
                             self.on_version_detected(device_id, str(v))
-                        return data["dps"]
-                except Exception:
-                    pass
-            # Przywróć poprzednią wersję jeśli żadna nie odpowiedziała
-            try:
-                client.set_version(current_ver)
+                    return data["dps"]
             except Exception:
                 pass
 
@@ -250,7 +271,7 @@ class TuyaLocalManager:
         t0 = time.time()
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2.5)
+            s.settimeout(2.0)
             s.connect((ip, 6668))
             s.close()
             tcp_ok = True
@@ -269,7 +290,9 @@ class TuyaLocalManager:
                 try:
                     d = tinytuya.OutletDevice(dev_id, ip, local_key)
                     d.set_version(float(v))
-                    d.set_socketTimeout(2.5)
+                    d.set_socketTimeout(1.5)
+                    d.set_socketRetryLimit(1)
+                    d.set_socketPersistent(False)
                     res = d.status()
                     if isinstance(res, dict) and "dps" in res and res["dps"]:
                         tuya_status = res["dps"]

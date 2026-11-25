@@ -1390,7 +1390,10 @@
         testMappingModalObj.show();
 
         try {
-            const res = await fetch(api(`/api/mappings/${encodeURIComponent(mapId)}/test`), { method: "POST" });
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 15000);
+            const res = await fetch(api(`/api/mappings/${encodeURIComponent(mapId)}/test`), { method: "POST", signal: ctrl.signal });
+            clearTimeout(timer);
             const d = await res.json();
 
             if (d.error) {

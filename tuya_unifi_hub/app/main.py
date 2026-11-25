@@ -1,6 +1,7 @@
 ﻿import os
 import time
 import logging
+import asyncio
 import threading
 from typing import Dict, Any, List
 from fastapi import FastAPI, Request
@@ -225,7 +226,7 @@ async def delete_device(device_id: str):
 @app.get("/api/devices/{device_id}/poll")
 async def poll_device(device_id: str):
     try:
-        dps = tuya_local.poll_device_status(device_id)
+        dps = await asyncio.to_thread(tuya_local.poll_device_status, device_id)
         if dps:
             on_local_status_update(device_id, dps)
             return {"dps": dps, "count": len(dps)}
@@ -312,8 +313,8 @@ async def test_mapping(map_id: str):
     entity_name = (m.get("entity_name") or "").strip()
     dev = devices.get(dev_id, {})
 
-    # 1. Próba świeżego odczytu po LAN (z auto-detekcją wersji 3.4/3.3/3.5/3.1)
-    fresh_dps = tuya_local.poll_device_status(dev_id)
+    # 1. Próba świeżego odczytu po LAN (w osobnym wątku, bez blokowania FastAPI)
+    fresh_dps = await asyncio.to_thread(tuya_local.poll_device_status, dev_id)
     lan_ok = bool(fresh_dps and isinstance(fresh_dps, dict) and len(fresh_dps) > 0)
 
     if lan_ok:
@@ -408,7 +409,7 @@ async def force_publish_mapping(map_id: str, req: Request):
     val_to_send = custom_val
 
     if val_to_send is None:
-        fresh_dps = tuya_local.poll_device_status(dev_id)
+        fresh_dps = await asyncio.to_thread(tuya_local.poll_device_status, dev_id)
         if fresh_dps and isinstance(fresh_dps, dict):
             on_local_status_update(dev_id, fresh_dps)
             val_to_send = TuyaLocalManager.resolve_dps_value(fresh_dps, dps_k)
@@ -707,7 +708,7 @@ async def test_lan_connection(req: Request):
     except (ValueError, TypeError):
         ver = 3.3
 
-    result = tuya_local.test_connection(ip=ip, dev_id=dev_id, local_key=local_key, version=ver)
+    result = await asyncio.to_thread(tuya_local.test_connection, ip, dev_id, local_key, ver)
     if dev_id and dev_id in devices:
         updated = False
         if result.get("detected_version") and str(devices[dev_id].get("version", "")) != str(result["detected_version"]):
