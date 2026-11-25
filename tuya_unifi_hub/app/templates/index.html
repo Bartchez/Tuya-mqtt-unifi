@@ -106,11 +106,12 @@
                                     <th class="sortable" onclick="toggleSort('matches', 'local_ip')">Wymuszony Lokalny IP <i id="sort-matches-local_ip" class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th>Adres MAC (UniFi/LAN)</th>
                                     <th class="sortable" onclick="toggleSort('matches', 'status')">Status powiązania <i id="sort-matches-status" class="bi bi-arrow-down-up sort-icon"></i></th>
+                                    <th class="sortable" onclick="toggleSort('matches', 'mapped')">Mapowanie MQTT <i id="sort-matches-mapped" class="bi bi-arrow-down-up sort-icon"></i></th>
                                     <th class="text-end">Akcje i narzędzia</th>
                                 </tr>
                             </thead>
                             <tbody id="matches-table-body">
-                                <tr><td colspan="8" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Ładowanie danych dopasowania...</td></tr>
+                                <tr><td colspan="9" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Ładowanie danych dopasowania...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -733,7 +734,7 @@
         tbody.innerHTML = "";
 
         if (matchesCache.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-muted">
+            tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">
                 Brak urządzeń w bazie. Zaloguj się kodem QR w zakładce "Logowanie Tuya (Kod QR)" lub kliknij "1. Pobierz z Tuya".
             </td></tr>`;
             document.getElementById("match-stats").textContent = "Urządzeń: 0";
@@ -741,6 +742,13 @@
         }
 
         let matchedCount = 0;
+
+        const mapsByDev = {};
+        for (const m of Object.values(mappingsCache || {})) {
+            if (!m || !m.device_id) continue;
+            if (!mapsByDev[m.device_id]) mapsByDev[m.device_id] = [];
+            mapsByDev[m.device_id].push(m.entity_name || m.dps_key);
+        }
 
         const sortedMatches = [...matchesCache];
         const st = sortState.matches;
@@ -750,11 +758,23 @@
             sortedMatches.sort((a, b) => compareIp(a.local_ip, b.local_ip, st.dir));
         } else if (st.key === "status") {
             sortedMatches.sort((a, b) => (a.status || "").localeCompare(b.status || "", "pl", { sensitivity: "base" }) * st.dir);
+        } else if (st.key === "mapped") {
+            sortedMatches.sort((a, b) => {
+                const ca = (mapsByDev[a.device_id] || []).length;
+                const cb = (mapsByDev[b.device_id] || []).length;
+                if (ca !== cb) return (cb - ca) * st.dir;
+                return (a.name || "").localeCompare(b.name || "", "pl", { sensitivity: "base" });
+            });
         }
 
         for (const item of sortedMatches) {
             const isMatched = Boolean(item.local_ip && item.local_ip !== "-");
             if (isMatched) matchedCount++;
+
+            const devMapList = mapsByDev[item.device_id] || [];
+            const mappedHtml = devMapList.length > 0
+                ? `<span class="badge bg-success" title="${devMapList.join(', ').replace(/"/g, '&quot;')}"><i class="bi bi-diagram-3-fill me-1"></i>TAK (${devMapList.length})</span>`
+                : `<span class="badge bg-light text-muted border">NIE</span>`;
 
             let statusBadge = "bg-secondary";
             const stLow = (item.status || "").toLowerCase();
@@ -782,6 +802,7 @@
                 </td>
                 <td><small class="font-monospace">${item.mac || '-'}</small></td>
                 <td><span class="badge ${statusBadge}">${item.status}</span></td>
+                <td>${mappedHtml}</td>
                 <td class="text-end">
                     <div class="btn-group btn-group-sm">
                         <button class="btn btn-outline-primary" title="Wybierz powiązanie z listy UniFi" onclick="openBindModal('${item.device_id}')">
@@ -1394,6 +1415,7 @@
             const res = await fetch(api("/api/mappings"));
             mappingsCache = await res.json();
             renderMappingsTable();
+            renderMatchesTable();
         } catch(e) { console.error(e); }
     }
 
