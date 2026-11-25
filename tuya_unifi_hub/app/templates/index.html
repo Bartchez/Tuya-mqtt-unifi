@@ -1072,20 +1072,26 @@
             const existingMap = devMappings[k];
             let mapCell = existingMap ? `<span class="badge bg-success mapped-badge"><i class="bi bi-check-circle me-1"></i>${existingMap.entity_name}</span>` : `<span class="text-muted small">—</span>`;
 
-            const safeDevId = String(currentDpsDeviceId).replace(/'/g, "\\'");
-            const safeKey = String(k).replace(/'/g, "\\'");
             return `<tr class="dps-row">
                 <td><code class="fw-bold">${k}</code></td>
                 <td class="dps-value">${valDisplay}</td>
                 <td>${typeBadge}</td>
                 <td>${mapCell}</td>
                 <td>
-                    <button type="button" class="btn btn-sm btn-outline-success" onclick="quickAddMapping('${safeDevId}', '${safeKey}')">
+                    <button type="button" class="btn btn-sm btn-outline-success btn-quick-map" data-dev-id="${String(currentDpsDeviceId).replace(/"/g, '&quot;')}" data-dps-key="${String(k).replace(/"/g, '&quot;')}">
                         <i class="bi bi-plus-circle me-1"></i>Mapuj
                     </button>
                 </td>
             </tr>`;
         }).join('');
+
+        tbody.querySelectorAll(".btn-quick-map").forEach(btn => {
+            btn.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                quickAddMapping(btn.dataset.devId, btn.dataset.dpsKey);
+            });
+        });
     }
 
     async function pollDpsNow() {
@@ -1111,52 +1117,76 @@
     }
 
     function quickAddMapping(deviceId, dpsKey) {
-        const dev = devicesCache[deviceId] || {};
-        const currentVal = (dev.dps && Object.prototype.hasOwnProperty.call(dev.dps, dpsKey)) ? dev.dps[dpsKey] : undefined;
+        try {
+            const dev = devicesCache[deviceId] || {};
+            const currentVal = (dev.dps && Object.prototype.hasOwnProperty.call(dev.dps, dpsKey)) ? dev.dps[dpsKey] : undefined;
 
-        const openAndFill = () => {
-            document.getElementById("mappingModalTitle").textContent = "Nowe mapowanie MQTT";
-            document.getElementById("edit_map_id").value = "";
+            let opened = false;
+            const openAndFill = () => {
+                if (opened) return;
+                opened = true;
+                try {
+                    document.getElementById("mappingModalTitle").textContent = "Nowe mapowanie MQTT";
+                    document.getElementById("edit_map_id").value = "";
 
-            const sel = document.getElementById("map_device_select");
-            sel.innerHTML = '<option value="">Wybierz urządzenie...</option>';
-            for (const [id, d] of Object.entries(devicesCache)) {
-                sel.innerHTML += `<option value="${id}">${d.name || id} (${d.ip || 'Brak IP'})</option>`;
-            }
-            sel.disabled = false;
-            sel.value = deviceId;
+                    const sel = document.getElementById("map_device_select");
+                    sel.innerHTML = "";
+                    const defOpt = document.createElement("option");
+                    defOpt.value = "";
+                    defOpt.textContent = "Wybierz urządzenie...";
+                    sel.appendChild(defOpt);
 
-            onMappingDeviceChange();
+                    for (const [id, d] of Object.entries(devicesCache)) {
+                        const opt = document.createElement("option");
+                        opt.value = id;
+                        opt.textContent = `${d.name || id} (${d.ip || 'Brak IP'})`;
+                        sel.appendChild(opt);
+                    }
+                    sel.disabled = false;
+                    sel.value = deviceId;
 
-            const dpsSel = document.getElementById("map_dps_select");
-            // Jeśli klucza nie ma na liście, dodaj go jako opcję
-            if (![...dpsSel.options].some(o => o.value === String(dpsKey))) {
-                const opt = document.createElement("option");
-                opt.value = String(dpsKey);
-                opt.textContent = `DPS ${dpsKey}`;
-                dpsSel.insertBefore(opt, dpsSel.firstChild);
-            }
-            dpsSel.value = String(dpsKey);
+                    onMappingDeviceChange();
 
-            const cleanName = (dev.name || deviceId).replace(/[^a-zA-Z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ _-]/g, '').trim();
-            document.getElementById("map_entity_name").value = `${cleanName} ${dpsKey}`;
-            document.getElementById("map_unit").value = "";
+                    const dpsSel = document.getElementById("map_dps_select");
+                    if (!Array.from(dpsSel.options).some(o => o.value === String(dpsKey))) {
+                        const opt = document.createElement("option");
+                        opt.value = String(dpsKey);
+                        opt.textContent = `DPS ${dpsKey}`;
+                        dpsSel.insertBefore(opt, dpsSel.firstChild);
+                    }
+                    dpsSel.value = String(dpsKey);
 
-            if (currentVal === true || currentVal === false || currentVal === "true" || currentVal === "false") {
-                document.getElementById("map_component_type").value = "switch";
+                    const cleanName = (dev.name || deviceId).replace(/[^a-zA-Z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ _-]/g, '').trim();
+                    document.getElementById("map_entity_name").value = `${cleanName} ${dpsKey}`;
+                    document.getElementById("map_unit").value = "";
+
+                    if (currentVal === true || currentVal === false || currentVal === "true" || currentVal === "false") {
+                        document.getElementById("map_component_type").value = "switch";
+                    } else {
+                        document.getElementById("map_component_type").value = "sensor";
+                    }
+
+                    const mapEl = document.getElementById("mappingModal");
+                    const mapModal = bootstrap.Modal.getOrCreateInstance(mapEl);
+                    mapModal.show();
+                } catch (innerErr) {
+                    console.error("Błąd openAndFill:", innerErr);
+                    alert("Błąd otwierania formularza mapowania: " + innerErr.message);
+                }
+            };
+
+            const previewEl = document.getElementById("dpsPreviewModal");
+            const previewModal = bootstrap.Modal.getOrCreateInstance(previewEl);
+            if (previewEl.classList.contains("show")) {
+                previewEl.addEventListener("hidden.bs.modal", openAndFill, { once: true });
+                previewModal.hide();
+                setTimeout(openAndFill, 350);
             } else {
-                document.getElementById("map_component_type").value = "sensor";
+                openAndFill();
             }
-
-            mappingModalObj.show();
-        };
-
-        const previewEl = document.getElementById("dpsPreviewModal");
-        if (previewEl.classList.contains("show")) {
-            previewEl.addEventListener("hidden.bs.modal", openAndFill, { once: true });
-            dpsPreviewModalObj.hide();
-        } else {
-            openAndFill();
+        } catch (err) {
+            console.error("Błąd quickAddMapping:", err);
+            alert("Błąd uruchamiania mapowania: " + err.message);
         }
     }
 
@@ -1454,16 +1484,24 @@
         const dev = devicesCache[devId];
         const dpsSel = document.getElementById("map_dps_select");
         dpsSel.innerHTML = "";
+        const addOpt = (val, label) => {
+            const o = document.createElement("option");
+            o.value = String(val);
+            o.textContent = label;
+            dpsSel.appendChild(o);
+        };
         if (dev && dev.dps && Object.keys(dev.dps).length > 0) {
             for (const [k, v] of Object.entries(dev.dps)) {
-                dpsSel.innerHTML += `<option value="${k}">DPS ${k} (Wartość: ${v})</option>`;
+                const valStr = typeof v === "object" ? JSON.stringify(v) : String(v);
+                const shortVal = valStr.length > 40 ? valStr.substring(0, 40) + "..." : valStr;
+                addOpt(k, `DPS ${k} (Wartość: ${shortVal})`);
             }
         } else {
-            dpsSel.innerHTML += `<option value="1">DPS 1 (Zwykle On/Off)</option>`;
-            dpsSel.innerHTML += `<option value="2">DPS 2 (Tryb / Jasność)</option>`;
-            dpsSel.innerHTML += `<option value="presence_state">presence_state (Obecność)</option>`;
+            addOpt("1", "DPS 1 (Zwykle On/Off)");
+            addOpt("2", "DPS 2 (Tryb / Jasność)");
+            addOpt("presence_state", "presence_state (Obecność)");
         }
-        dpsSel.innerHTML += `<option value="custom">Inny DPS (ręczny)</option>`;
+        addOpt("custom", "Inny DPS (ręczny)");
     }
 
     async function saveNewMapping() {
@@ -1471,17 +1509,25 @@
         const devId = document.getElementById("map_device_select").value;
         const dps = document.getElementById("map_dps_select").value;
         const comp = document.getElementById("map_component_type").value;
-        const name = document.getElementById("map_entity_name").value;
-        const unit = document.getElementById("map_unit").value;
+        const name = document.getElementById("map_entity_name").value.trim();
+        const unit = document.getElementById("map_unit").value.trim();
         if (!devId || !dps || !comp || !name) { alert("Wypełnij wymagane pola!"); return; }
         const mapId = editId ? editId : `${devId}_${dps}_${comp}`;
-        await fetch(api("/api/mappings"), {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ id: mapId, device_id: devId, dps_key: dps, component: comp, entity_name: name, extra: { unit } })
-        });
-        mappingModalObj.hide();
-        refreshMappings();
+        try {
+            const res = await fetch(api("/api/mappings"), {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ id: mapId, device_id: devId, dps_key: dps, component: comp, entity_name: name, extra: { unit } })
+            });
+            if (!res.ok) {
+                alert("Błąd zapisu mapowania (HTTP " + res.status + ")");
+                return;
+            }
+            bootstrap.Modal.getOrCreateInstance(document.getElementById("mappingModal")).hide();
+            await refreshMappings();
+        } catch (err) {
+            alert("Błąd połączenia podczas zapisu mapowania: " + err.message);
+        }
     }
 
     async function deleteMapping(mapId) {
