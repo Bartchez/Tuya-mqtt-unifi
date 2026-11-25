@@ -1072,13 +1072,15 @@
             const existingMap = devMappings[k];
             let mapCell = existingMap ? `<span class="badge bg-success mapped-badge"><i class="bi bi-check-circle me-1"></i>${existingMap.entity_name}</span>` : `<span class="text-muted small">—</span>`;
 
+            const safeDevId = String(currentDpsDeviceId).replace(/'/g, "\\'");
+            const safeKey = String(k).replace(/'/g, "\\'");
             return `<tr class="dps-row">
                 <td><code class="fw-bold">${k}</code></td>
                 <td class="dps-value">${valDisplay}</td>
                 <td>${typeBadge}</td>
                 <td>${mapCell}</td>
                 <td>
-                    <button class="btn btn-sm btn-outline-success" onclick="quickAddMapping('${currentDpsDeviceId}', '${k}', '${v}')">
+                    <button type="button" class="btn btn-sm btn-outline-success" onclick="quickAddMapping('${safeDevId}', '${safeKey}')">
                         <i class="bi bi-plus-circle me-1"></i>Mapuj
                     </button>
                 </td>
@@ -1108,24 +1110,54 @@
         }
     }
 
-    function quickAddMapping(deviceId, dpsKey, currentVal) {
-        dpsPreviewModalObj.hide();
-        openAddMappingModal();
-        setTimeout(() => {
-            document.getElementById("map_device_select").value = deviceId;
+    function quickAddMapping(deviceId, dpsKey) {
+        const dev = devicesCache[deviceId] || {};
+        const currentVal = (dev.dps && Object.prototype.hasOwnProperty.call(dev.dps, dpsKey)) ? dev.dps[dpsKey] : undefined;
+
+        const openAndFill = () => {
+            document.getElementById("mappingModalTitle").textContent = "Nowe mapowanie MQTT";
+            document.getElementById("edit_map_id").value = "";
+
+            const sel = document.getElementById("map_device_select");
+            sel.innerHTML = '<option value="">Wybierz urządzenie...</option>';
+            for (const [id, d] of Object.entries(devicesCache)) {
+                sel.innerHTML += `<option value="${id}">${d.name || id} (${d.ip || 'Brak IP'})</option>`;
+            }
+            sel.disabled = false;
+            sel.value = deviceId;
+
             onMappingDeviceChange();
-            setTimeout(() => {
-                document.getElementById("map_dps_select").value = dpsKey;
-                const dev = devicesCache[deviceId];
-                const cleanName = (dev ? dev.name : deviceId).replace(/[^a-zA-Z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ ]/g, '').trim();
-                document.getElementById("map_entity_name").value = `${cleanName} ${dpsKey}`;
-                if (currentVal === "true" || currentVal === "false" || typeof currentVal === "boolean") {
-                    document.getElementById("map_component_type").value = "switch";
-                } else {
-                    document.getElementById("map_component_type").value = "sensor";
-                }
-            }, 100);
-        }, 300);
+
+            const dpsSel = document.getElementById("map_dps_select");
+            // Jeśli klucza nie ma na liście, dodaj go jako opcję
+            if (![...dpsSel.options].some(o => o.value === String(dpsKey))) {
+                const opt = document.createElement("option");
+                opt.value = String(dpsKey);
+                opt.textContent = `DPS ${dpsKey}`;
+                dpsSel.insertBefore(opt, dpsSel.firstChild);
+            }
+            dpsSel.value = String(dpsKey);
+
+            const cleanName = (dev.name || deviceId).replace(/[^a-zA-Z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ _-]/g, '').trim();
+            document.getElementById("map_entity_name").value = `${cleanName} ${dpsKey}`;
+            document.getElementById("map_unit").value = "";
+
+            if (currentVal === true || currentVal === false || currentVal === "true" || currentVal === "false") {
+                document.getElementById("map_component_type").value = "switch";
+            } else {
+                document.getElementById("map_component_type").value = "sensor";
+            }
+
+            mappingModalObj.show();
+        };
+
+        const previewEl = document.getElementById("dpsPreviewModal");
+        if (previewEl.classList.contains("show")) {
+            previewEl.addEventListener("hidden.bs.modal", openAndFill, { once: true });
+            dpsPreviewModalObj.hide();
+        } else {
+            openAndFill();
+        }
     }
 
     function openEditDevice(devId) {

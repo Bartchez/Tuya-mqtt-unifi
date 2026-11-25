@@ -1,6 +1,6 @@
 ﻿name: "Tuya UniFi Hub"
 description: "Lokalny mostek Tuya LAN do MQTT z Home Assistant Discovery, automatycznym dopasowywaniem klientów UniFi, wymuszaniem IP i rezerwacją DHCP."
-version: "2.0.4"
+version: "2.0.5"
 slug: "tuya_unifi_hub"
 init: false
 arch:
