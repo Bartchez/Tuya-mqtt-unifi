@@ -1299,12 +1299,48 @@
                 <td><span class="badge bg-success">Discovery Active</span></td>
                 <td>
                     <button class="btn btn-sm btn-outline-success me-1" title="Testuj odczyt LAN i wysyłkę do MQTT" onclick="testMapping('${mapId}')"><i class="bi bi-play-circle"></i> Test</button>
+                    <button class="btn btn-sm btn-outline-info me-1" title="Wymuś natychmiastowe wysłanie wartości do brokera MQTT" onclick="forcePublishMqtt('${mapId}', this)"><i class="bi bi-send"></i> Wyślij MQTT</button>
                     <button class="btn btn-sm btn-outline-warning me-1" title="Stałe IP w UniFi" onclick="openUnifiIpModal('${m.device_id}')"><i class="bi bi-router"></i></button>
                     <button class="btn btn-sm btn-outline-primary me-1" title="Edytuj" onclick="openEditMapping('${mapId}')"><i class="bi bi-pencil"></i></button>
                     <button class="btn btn-sm btn-outline-danger" title="Usuń" onclick="deleteMapping('${mapId}')"><i class="bi bi-trash"></i></button>
                 </td>
             `;
             tbody.appendChild(tr);
+        }
+    }
+
+    async function forcePublishMqtt(mapId, btnEl) {
+        const origHtml = btnEl ? btnEl.innerHTML : "";
+        if (btnEl) {
+            btnEl.disabled = true;
+            btnEl.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Wysyłanie...`;
+        }
+        try {
+            const res = await fetch(api(`/api/mappings/${encodeURIComponent(mapId)}/publish`), {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (data.success) {
+                if (btnEl) {
+                    btnEl.classList.remove("btn-outline-info");
+                    btnEl.classList.add("btn-success");
+                    btnEl.innerHTML = `<i class="bi bi-check2 me-1"></i>${data.payload}`;
+                    setTimeout(() => {
+                        btnEl.classList.remove("btn-success");
+                        btnEl.classList.add("btn-outline-info");
+                        btnEl.innerHTML = origHtml;
+                        btnEl.disabled = false;
+                    }, 2500);
+                }
+            } else {
+                alert("Błąd wysyłki MQTT: " + (data.error || "Nieznany błąd"));
+                if (btnEl) { btnEl.innerHTML = origHtml; btnEl.disabled = false; }
+            }
+        } catch (err) {
+            alert("Błąd połączenia: " + err.message);
+            if (btnEl) { btnEl.innerHTML = origHtml; btnEl.disabled = false; }
         }
     }
 

@@ -372,6 +372,79 @@ async def test_mapping(map_id: str):
         "all_dps": active_dps,
     }
 
+@app.post("/api/mappings/{map_id}/publish")
+async def force_publish_mapping(map_id: str, req: Request):
+    """Wymusza natychmiastowe wysłanie Discovery oraz aktualnej wartości mapowania do brokera MQTT."""
+    m = mappings.get(map_id)
+    if not m:
+        return {"success": False, "error": f"Nie znaleziono mapowania {map_id}"}
+
+    if not mqtt_service.is_connected:
+        return {"success": False, "error": "Broker MQTT jest rozłączony"}
+
+    body = {}
+    try:
+        raw = await req.body()
+        if raw:
+            body = await req.json()
+    except Exception:
+        body = {}
+
+    dev_id = m["device_id"]
+    dps_k = str(m["dps_key"])
+    entity_name = (m.get("entity_name") or "").strip()
+    dev = devices.get(dev_id, {})
+
+    custom_val = body.get("value") if isinstance(body, dict) else None
+    source = "Wartość ręczna"
+    val_to_send = custom_val
+
+    if val_to_send is None:
+        fresh_dps = tuya_local.poll_device_status(dev_id)
+        if fresh_dps and isinstance(fresh_dps, dict):
+            on_local_status_update(dev_id, fresh_dps)
+            val_to_send = TuyaLocalManager.resolve_dps_value(fresh_dps, dps_k)
+            source = "LAN (na żywo)"
+        if val_to_send is None:
+            cached_dps = dev.get("dps", {}) or {}
+            val_to_send = TuyaLocalManager.resolve_dps_value(cached_dps, dps_k)
+            source = "Cache"
+        if val_to_send is None:
+            val_to_send = "OFF"
+            source = "Domyślna (OFF)"
+
+    extra = dict(m.get("extra", {}) or {})
+    extra["version"] = dev.get("version", "3.3")
+    discovery_topic, cfg = MQTTDiscoveryBuilder.build_config(
+        component=m["component"],
+        device_id=dev_id,
+        device_name=dev.get("name", dev_id),
+        dps_key=dps_k,
+        dps_name=entity_name,
+        extra_options=extra
+    )
+
+    mqtt_service.publish_status_online()
+    mqtt_service.publish_discovery(discovery_topic, cfg)
+    mqtt_service.register_command_handler(dev_id, on_mqtt_command)
+    mqtt_service.publish_mapped_value(dev_id, dps_k, val_to_send)
+
+    if isinstance(val_to_send, bool):
+        sent_payload = "ON" if val_to_send else "OFF"
+    elif str(val_to_send).lower() in ["true", "presence", "motion", "on", "1"]:
+        sent_payload = "ON"
+    elif str(val_to_send).lower() in ["false", "none", "off", "0"]:
+        sent_payload = "OFF"
+    else:
+        sent_payload = str(val_to_send)
+
+    return {
+        "success": True,
+        "topic": cfg.get("state_topic"),
+        "payload": sent_payload,
+        "source": source
+    }
+
 # --- ENDPOINTY UNIFI & SIECI LAN ---
 
 def get_unifi_mgr() -> UniFiManager:
