@@ -1,0 +1,1583 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tuya UniFi Hub</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .card { border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: none; margin-bottom: 20px; }
+        .card-header { background-color: #ffffff; border-bottom: 1px solid #edf2f7; font-weight: 600; border-top-left-radius: 12px !important; border-top-right-radius: 12px !important; }
+        .badge-dps { font-size: 0.8rem; margin: 2px; cursor: default; }
+        .nav-tabs .nav-link { color: #495057; font-weight: 500; }
+        .nav-tabs .nav-link.active { font-weight: 600; border-bottom: 3px solid #0d6efd; color: #0d6efd; }
+        .qr-box { background: white; padding: 20px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
+        .dps-row:hover { background: #f0f7ff; cursor: pointer; }
+        .dps-value { font-family: monospace; font-size: 0.95rem; }
+        .mapped-badge { font-size: 0.75rem; }
+        tr.clickable-row:hover { background: #eef5ff; cursor: pointer; }
+        .table-match th, .table-match td { vertical-align: middle; }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid px-4 py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+        <div>
+            <h2 class="mb-0"><i class="bi bi-cpu text-primary me-2"></i>Tuya UniFi Hub</h2>
+            <small class="text-muted">Home Assistant Add-on: Lokalna kontrola Tuya, dopasowywanie klientów UniFi, wymuszanie IP, stałe rezerwacje DHCP i MQTT Discovery</small>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <span id="badge-mqtt" class="badge bg-secondary"><i class="bi bi-hdd-network"></i> MQTT: Sprawdzanie...</span>
+        </div>
+    </div>
+
+    <!-- Zakładki -->
+    <ul class="nav nav-tabs mb-4" id="mainTabs" role="tablist">
+        <li class="nav-item">
+            <button class="nav-link active" id="match-tab" data-bs-toggle="tab" data-bs-target="#tab-match" type="button">
+                <i class="bi bi-link-45deg me-1 text-primary"></i> <strong>Dopasowanie Tuya &lt;-&gt; UniFi &amp; Wymuszanie IP</strong>
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" id="devices-tab" data-bs-toggle="tab" data-bs-target="#tab-devices" type="button">
+                <i class="bi bi-list-check me-1"></i> Urządzenia Tuya
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" id="mappings-tab" data-bs-toggle="tab" data-bs-target="#tab-mappings" type="button">
+                <i class="bi bi-diagram-3 me-1"></i> Mapowania MQTT (Home Assistant)
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" id="qr-tab" data-bs-toggle="tab" data-bs-target="#tab-qr" type="button">
+                <i class="bi bi-qr-code-scan me-1"></i> Logowanie Tuya (Kod QR)
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" id="unifi-tab" data-bs-toggle="tab" data-bs-target="#tab-unifi" type="button">
+                <i class="bi bi-router me-1"></i> Konfiguracja UniFi &amp; MQTT
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content" id="mainTabsContent">
+
+        <!-- ZAKŁADKA 1: GŁÓWNA TABELA DOPASOWANIA TUYA <-> UNIFI & WYMUSZANIA IP -->
+        <div class="tab-pane fade show active" id="tab-match" role="tabpanel">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div>
+                        <i class="bi bi-diagram-2 text-primary me-2"></i><strong>Zarządzanie adresacją urządzeń Tuya w UniFi / LAN</strong>
+                    </div>
+                    <div class="d-flex flex-wrap gap-1">
+                        <button class="btn btn-sm btn-outline-success" onclick="refreshCloudDevices()"><i class="bi bi-cloud-arrow-down me-1"></i>1. Pobierz z Tuya</button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="fetchNetworkClients(true)"><i class="bi bi-router me-1"></i>2. Pobierz z UniFi / LAN</button>
+                        <button class="btn btn-sm btn-primary" onclick="runAutoMatch()"><i class="bi bi-magic me-1"></i>3. Automatycznie połącz w pary</button>
+                        <button class="btn btn-sm btn-outline-info" onclick="refreshMatches()"><i class="bi bi-arrow-clockwise"></i> Odśwież widok</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-light border d-flex justify-content-between align-items-center py-2 mb-3 small">
+                        <div>
+                            <i class="bi bi-info-circle text-primary me-1"></i>
+                            W tej tabeli możesz <strong>wymusić lokalny adres IP</strong>, <strong>zmienić powiązanie z routerem UniFi</strong>, <strong>zapisać stałą rezerwację DHCP (Fixed IP)</strong> oraz przetestować komunikację LAN (port 6668).
+                        </div>
+                        <div id="match-stats" class="text-muted fw-bold"></div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="table table-hover table-match align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Nazwa Tuya</th>
+                                    <th>Tuya Device ID</th>
+                                    <th>Typ / Kategoria</th>
+                                    <th>Adres z chmury Tuya</th>
+                                    <th>Wymuszony Lokalny IP</th>
+                                    <th>Adres MAC (UniFi/LAN)</th>
+                                    <th>Status powiązania</th>
+                                    <th class="text-end">Akcje i narzędzia</th>
+                                </tr>
+                            </thead>
+                            <tbody id="matches-table-body">
+                                <tr><td colspan="8" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Ładowanie danych dopasowania...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ZAKŁADKA 2: URZĄDZENIA TUYA -->
+        <div class="tab-pane fade" id="tab-devices" role="tabpanel">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span><i class="bi bi-plug me-2"></i>Wykryte i skonfigurowane urządzenia Tuya</span>
+                    <div>
+                        <button class="btn btn-sm btn-outline-success me-1" onclick="refreshCloudDevices()"><i class="bi bi-cloud-arrow-down"></i> Odśwież z Tuya Cloud</button>
+                        <button class="btn btn-sm btn-outline-secondary me-1" onclick="refreshDevices()"><i class="bi bi-arrow-clockwise"></i> Odśwież</button>
+                        <button class="btn btn-sm btn-outline-info me-1" onclick="document.getElementById('import_json_input').click()"><i class="bi bi-file-earmark-arrow-up"></i> Wgraj tuya_devices.json</button>
+                        <button class="btn btn-sm btn-primary" onclick="openAddDeviceModal()"><i class="bi bi-plus-lg"></i> Dodaj ręcznie</button>
+                        <input type="file" id="import_json_input" style="display:none;" accept=".json" onchange="handleImportJson(event)">
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Nazwa / ID</th>
+                                    <th>Adres IP &amp; MAC</th>
+                                    <th>Klucz Local Key</th>
+                                    <th>Parametry DPS (podgląd)</th>
+                                    <th>Akcje</th>
+                                </tr>
+                            </thead>
+                            <tbody id="devices-table-body">
+                                <tr><td colspan="5" class="text-center py-4 text-muted">Ładowanie...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ZAKŁADKA 3: MAPOWANIE MQTT -->
+        <div class="tab-pane fade" id="tab-mappings" role="tabpanel">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-share me-2"></i>Kreator encji MQTT Home Assistant</span>
+                    <button class="btn btn-sm btn-success" onclick="openAddMappingModal()"><i class="bi bi-plus-circle"></i> Nowe mapowanie (Sensor/Switch/Light/Climate)</button>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small">
+                        Każde dodane tutaj mapowanie natychmiast generuje i wysyła konfigurację <strong>Home Assistant MQTT Discovery</strong>.
+                        Encja automatycznie pojawi się w Home Assistancie w integracji MQTT!
+                    </p>
+                    <div class="table-responsive">
+                        <table class="table table-striped align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Urządzenie</th>
+                                    <th>Punkt Tuya (DPS)</th>
+                                    <th>Typ encji MQTT</th>
+                                    <th>Nazwa encji</th>
+                                    <th>Status w HA</th>
+                                    <th>Akcje</th>
+                                </tr>
+                            </thead>
+                            <tbody id="mappings-table-body">
+                                <tr><td colspan="6" class="text-center py-4 text-muted">Brak skonfigurowanych mapowań MQTT.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ZAKŁADKA 4: LOGOWANIE QR -->
+        <div class="tab-pane fade" id="tab-qr" role="tabpanel">
+            <div class="card">
+                <div class="card-header"><i class="bi bi-qr-code me-2"></i>Tuya Local Key Extractor (Pobieranie kluczy kodem QR)</div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-5 border-end">
+                            <h5>1. Dane Konta Tuya / Smart Life</h5>
+                            <p class="small text-muted">Znajdziesz w aplikacji: <em>Ja (Profil) &rarr; Ustawienia &rarr; Konto i bezpieczeństwo &rarr; Kod użytkownika (User Code)</em></p>
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Aplikacja:</label>
+                                <select class="form-select" id="tuya_app_schema">
+                                    <option value="smartlife" selected>Smart Life</option>
+                                    <option value="tuyaSmart">Tuya Smart</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Twój Kod Użytkownika (User Code):</label>
+                                <input type="text" class="form-control border-primary" id="tuya_user_code" placeholder="Wklej User Code z aplikacji">
+                            </div>
+                            <button class="btn btn-primary w-100 py-2" onclick="startTuyaExtractor()"><i class="bi bi-qr-code-scan me-1"></i> Wygeneruj Kod QR i pobierz urządzenia</button>
+                            <div class="alert alert-secondary mt-3 small">
+                                <i class="bi bi-shield-check text-success me-1"></i> Nie potrzebujesz konta deweloperskiego Tuya!
+                            </div>
+                        </div>
+                        <div class="col-md-7 text-center d-flex flex-column justify-content-center align-items-center py-4">
+                            <div id="qr-display-box" class="qr-box mb-3">
+                                <i class="bi bi-qr-code text-secondary" style="font-size: 8rem;"></i>
+                                <p class="text-muted mt-2">Wpisz User Code i kliknij przycisk po lewej stronie</p>
+                            </div>
+                            <div id="qr-status-indicator" class="mt-2"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ZAKŁADKA 5: UNIFI & USTAWIENIA -->
+        <div class="tab-pane fade" id="tab-unifi" role="tabpanel">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-router-fill me-2"></i>Konfiguracja routera UniFi</div>
+                        <div class="card-body">
+                            <form id="unifi-form" onsubmit="saveUnifiSettings(event)">
+                                <div class="mb-3">
+                                    <label class="form-label">Host / IP kontrolera UniFi (Bramka)</label>
+                                    <input type="text" class="form-control" id="unifi_host" placeholder="np. 192.168.1.1">
+                                </div>
+                                <div class="row mb-3">
+                                    <div class="col-6">
+                                        <label class="form-label">Port</label>
+                                        <input type="number" class="form-control" id="unifi_port" value="443">
+                                    </div>
+                                    <div class="col-6">
+                                        <label class="form-label">Site</label>
+                                        <input type="text" class="form-control" id="unifi_site" value="default">
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label text-primary fw-bold"><i class="bi bi-key-fill me-1"></i>Klucz API UniFi (X-API-KEY)</label>
+                                    <input type="password" class="form-control border-primary" id="unifi_api_key" placeholder="Wklej tutaj klucz API z UniFi">
+                                    <small class="text-muted">UniFi OS: Settings &rarr; Control Plane / Admins &rarr; API Keys &rarr; Generate</small>
+                                </div>
+                                <div class="row mb-3">
+                                    <div class="col-6">
+                                        <label class="form-label">Użytkownik lokalny UniFi (opcjonalnie)</label>
+                                        <input type="text" class="form-control" id="unifi_user" placeholder="Login administratora">
+                                    </div>
+                                    <div class="col-6">
+                                        <label class="form-label">Hasło lokalne UniFi (opcjonalnie)</label>
+                                        <input type="password" class="form-control" id="unifi_password">
+                                    </div>
+                                </div>
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="checkbox" id="unifi_verify_ssl">
+                                    <label class="form-check-label" for="unifi_verify_ssl">Weryfikuj certyfikat SSL</label>
+                                </div>
+                                <button type="submit" class="btn btn-primary"><i class="bi bi-save me-1"></i> Zapisz UniFi</button>
+                                <button type="button" class="btn btn-outline-info ms-2" onclick="testUnifiConnection()"><i class="bi bi-plug"></i> Testuj połączenie</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-broadcast me-2"></i>Ustawienia brokera MQTT</div>
+                        <div class="card-body">
+                            <form id="mqtt-form" onsubmit="saveMqttSettings(event)">
+                                <div class="mb-3">
+                                    <label class="form-label">Host brokera MQTT</label>
+                                    <input type="text" class="form-control" id="mqtt_host" value="192.168.1.21">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Port</label>
+                                    <input type="number" class="form-control" id="mqtt_port" value="1883">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Użytkownik MQTT</label>
+                                    <input type="text" class="form-control" id="mqtt_user">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Hasło MQTT</label>
+                                    <input type="password" class="form-control" id="mqtt_password">
+                                </div>
+                                <button type="submit" class="btn btn-success"><i class="bi bi-save me-1"></i> Zapisz ustawienia MQTT</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== MODALE ===== -->
+
+<!-- MODAL: Wybór urządzenia z UniFi/LAN (Ręczne powiązanie) -->
+<div class="modal fade" id="bindModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="bi bi-link-45deg me-2"></i>Wybierz urządzenie z sieci UniFi / LAN</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="bind-target-info" class="alert alert-secondary py-2 small mb-3"></div>
+                <div class="input-group mb-3">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control" id="bind-search-input" placeholder="Filtruj listę klientów (nazwa, IP, MAC)..." oninput="filterNetworkClientsList()">
+                    <button class="btn btn-outline-secondary" type="button" onclick="fetchNetworkClients(true)"><i class="bi bi-arrow-clockwise"></i> Odśwież sieć</button>
+                </div>
+                <div class="table-responsive" style="max-height: 380px; overflow-y: auto;">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light sticky-top">
+                            <tr>
+                                <th>Nazwa w UniFi / LAN</th>
+                                <th>Adres IP</th>
+                                <th>Adres MAC</th>
+                                <th>Stały IP (UniFi)?</th>
+                                <th>Źródło</th>
+                                <th>Wybór</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bind-clients-table-body">
+                            <tr><td colspan="6" class="text-center py-3 text-muted">Ładowanie klientów...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Wymuszenie lokalnego adresu IP -->
+<div class="modal fade" id="forceIpModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="bi bi-bullseye me-2"></i>Wymuś lokalny IP dla Tuya</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="force-ip-dev-info" class="alert alert-secondary py-2 small mb-3"></div>
+                <form id="force-ip-form" onsubmit="applyForcedIp(event)">
+                    <input type="hidden" id="force_ip_dev_id">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Docelowy lokalny adres IP:</label>
+                        <input type="text" class="form-control border-info" id="force_ip_target" placeholder="np. 192.168.1.150" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Adres MAC urządzenia (opcjonalny dla stałego IP):</label>
+                        <input type="text" class="form-control" id="force_ip_mac" placeholder="np. FC:3C:D7:03:4D:E6">
+                    </div>
+                    <div class="d-flex justify-content-end gap-2">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
+                        <button type="submit" class="btn btn-info text-white"><i class="bi bi-check-lg me-1"></i> Zastosuj wymuszenie</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Test połączenia LAN Tuya -->
+<div class="modal fade" id="testLanModal" tabindex="-1">
+    <div class="modal-dialog modal-md">
+        <div class="modal-content">
+            <div class="modal-header bg-secondary text-white">
+                <h5 class="modal-title"><i class="bi bi-broadcast-pin me-2"></i>Test połączenia LAN (Port 6668)</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="test-lan-modal-body">
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary mb-3"></div>
+                    <p class="text-muted">Sprawdzanie gniazda TCP 6668 oraz odpytywanie protokołem Tuya...</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Zamknij</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Podgląd DPS urządzenia -->
+<div class="modal fade" id="dpsPreviewModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header" style="background: linear-gradient(135deg,#667eea,#764ba2); color:white;">
+                <h5 class="modal-title"><i class="bi bi-activity me-2"></i><span id="dps-modal-title">Podgląd parametrów</span></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div class="px-4 py-3 bg-light border-bottom d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div id="dps-device-info" class="small text-muted"></div>
+                    <button class="btn btn-sm btn-outline-primary" onclick="pollDpsNow()">
+                        <i class="bi bi-arrow-clockwise me-1"></i>Odśwież odczyt LAN
+                    </button>
+                </div>
+                <div id="dps-poll-status" class="px-4 pt-3"></div>
+                <div class="px-4 pb-3">
+                    <table class="table table-hover align-middle mt-2">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width:90px">DPS klucz</th>
+                                <th>Aktualna wartość</th>
+                                <th style="width:90px">Typ</th>
+                                <th>Status w HA</th>
+                                <th style="width:110px">Akcja</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dps-params-body">
+                            <tr><td colspan="5" class="text-center text-muted py-4">Ładowanie...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Zamknij</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Edycja Urządzenia Tuya -->
+<div class="modal fade" id="deviceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deviceModalTitle">Konfiguracja Urządzenia</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="device-form">
+                    <div class="mb-3">
+                        <label class="form-label">ID Urządzenia Tuya (Device ID)</label>
+                        <input type="text" class="form-control" id="dev_id" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Przyjazna Nazwa</label>
+                        <input type="text" class="form-control" id="dev_name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Lokalny Adres IP</label>
+                        <input type="text" class="form-control" id="dev_ip" placeholder="np. 192.168.1.150">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Adres MAC</label>
+                        <input type="text" class="form-control" id="dev_mac" placeholder="np. AA:BB:CC:DD:EE:FF">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Klucz Lokalny (Local Key)</label>
+                        <input type="text" class="form-control font-monospace" id="dev_key" placeholder="16-znakowy klucz">
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label">Node ID (Zigbee/BLE)</label>
+                            <input type="text" class="form-control" id="dev_node_id" placeholder="CID podbramkowe">
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label">Bramka (Gateway ID)</label>
+                            <input type="text" class="form-control" id="dev_gateway_id" placeholder="ID bramki">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Wersja protokołu Tuya</label>
+                        <select class="form-select" id="dev_version">
+                            <option value="3.3">3.3 (Standard)</option>
+                            <option value="3.1">3.1 (Starsze)</option>
+                            <option value="3.4">3.4</option>
+                            <option value="3.5">3.5 (Nowe)</option>
+                        </select>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
+                <button type="button" class="btn btn-primary" onclick="saveDeviceForm()"><i class="bi bi-check-lg"></i> Zapisz parametry</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Stałe IP w UniFi -->
+<div class="modal fade" id="unifiIpModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning bg-opacity-10">
+                <h5 class="modal-title"><i class="bi bi-router me-2"></i>Stałe IP w UniFi (Rezerwacja DHCP)</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="unifi-ip-dev-info" class="alert alert-secondary py-2 small mb-3"></div>
+                <form id="unifi-ip-form" onsubmit="applyUnifiFixedIpFromModal(event)">
+                    <input type="hidden" id="unifi_ip_dev_id">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Nazwa klienta w UniFi</label>
+                        <input type="text" class="form-control" id="unifi_ip_dev_name">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Adres MAC</label>
+                        <input type="text" class="form-control font-monospace" id="unifi_ip_mac" placeholder="np. AA:BB:CC:DD:EE:FF" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Docelowy stały adres IP</label>
+                        <input type="text" class="form-control border-warning" id="unifi_ip_target" placeholder="np. 192.168.1.150" required>
+                    </div>
+                    <div id="unifi-ip-result" class="mt-2"></div>
+                    <div class="d-flex justify-content-end gap-2 mt-3">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
+                        <button type="submit" class="btn btn-warning"><i class="bi bi-router me-1"></i> Przypisz stałe IP w UniFi</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Mapowanie MQTT -->
+<div class="modal fade" id="mappingModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="mappingModalTitle">Kreator Encji MQTT (Home Assistant)</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="mapping-form">
+                    <input type="hidden" id="edit_map_id">
+                    <div class="mb-3">
+                        <label class="form-label">Wybierz urządzenie Tuya</label>
+                        <select class="form-select" id="map_device_select" onchange="onMappingDeviceChange()" required>
+                            <option value="">Wybierz urządzenie...</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Wybierz punkt danych Tuya (DPS)</label>
+                        <select class="form-select" id="map_dps_select" required>
+                            <option value="">Wybierz DPS...</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Typ elementu MQTT</label>
+                        <select class="form-select" id="map_component_type" required>
+                            <option value="sensor">Sensor (czujnik, np. temperatura, stan)</option>
+                            <option value="switch">Switch (przełącznik on/off)</option>
+                            <option value="light">Light (oświetlenie)</option>
+                            <option value="climate">Climate (klimatyzacja / termostat)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Nazwa wyświetlana encji w HA</label>
+                        <input type="text" class="form-control" id="map_entity_name" placeholder="np. Czujnik Ruchu Salon" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Jednostka miary (opcjonalnie)</label>
+                        <input type="text" class="form-control" id="map_unit" placeholder="np. °C, W, %, V, cm">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
+                <button type="button" class="btn btn-success" onclick="saveNewMapping()"><i class="bi bi-broadcast"></i> Zapisz i opublikuj w HA</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Test Mapowania MQTT -->
+<div class="modal fade" id="testMappingModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="bi bi-play-circle me-2"></i>Test mapowania MQTT &amp; odczytu LAN</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="test-mapping-modal-body">
+                <div class="text-center py-4">
+                    <div class="spinner-border text-success mb-3"></div>
+                    <p class="text-muted">Odpytywanie urządzenia po LAN i wysyłka do brokera MQTT...</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-success" id="btn-retest-mapping"><i class="bi bi-arrow-clockwise me-1"></i>Testuj ponownie</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Zamknij</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const BASE_PATH = "{{ root_path }}" || "";
+
+    function api(endpoint) {
+        return (BASE_PATH + endpoint).replace(/\/+/g, '/');
+    }
+
+    let devicesCache = {};
+    let mappingsCache = {};
+    let matchesCache = [];
+    let networkClientsCache = [];
+    let currentBindDeviceId = null;
+
+    let deviceModalObj = null;
+    let mappingModalObj = null;
+    let unifiIpModalObj = null;
+    let dpsPreviewModalObj = null;
+    let bindModalObj = null;
+    let forceIpModalObj = null;
+    let testLanModalObj = null;
+    let testMappingModalObj = null;
+    let currentDpsDeviceId = null;
+
+    document.addEventListener("DOMContentLoaded", () => {
+        deviceModalObj      = new bootstrap.Modal(document.getElementById('deviceModal'));
+        mappingModalObj     = new bootstrap.Modal(document.getElementById('mappingModal'));
+        unifiIpModalObj     = new bootstrap.Modal(document.getElementById('unifiIpModal'));
+        dpsPreviewModalObj  = new bootstrap.Modal(document.getElementById('dpsPreviewModal'));
+        bindModalObj        = new bootstrap.Modal(document.getElementById('bindModal'));
+        forceIpModalObj     = new bootstrap.Modal(document.getElementById('forceIpModal'));
+        testLanModalObj     = new bootstrap.Modal(document.getElementById('testLanModal'));
+        testMappingModalObj = new bootstrap.Modal(document.getElementById('testMappingModal'));
+
+        refreshMatches();
+        refreshDevices();
+        refreshMappings();
+        loadSettings();
+        checkMqttStatus();
+        fetchNetworkClients(false);
+    });
+
+    // ===== MQTT STATUS =====
+    async function checkMqttStatus() {
+        try {
+            const res = await fetch(api("/api/health"));
+            const data = await res.json();
+            const badge = document.getElementById("badge-mqtt");
+            if (data.mqtt_connected) {
+                badge.className = "badge bg-success";
+                badge.innerHTML = '<i class="bi bi-hdd-network"></i> MQTT: Połączono';
+            } else {
+                badge.className = "badge bg-danger";
+                badge.innerHTML = '<i class="bi bi-hdd-network"></i> MQTT: Rozłączono';
+            }
+        } catch(e) {
+            const badge = document.getElementById("badge-mqtt");
+            badge.className = "badge bg-warning text-dark";
+            badge.innerHTML = '<i class="bi bi-hdd-network"></i> MQTT: Błąd';
+        }
+        setTimeout(checkMqttStatus, 10000);
+    }
+
+    // ===== GŁÓWNA TABELA DOPASOWAŃ (Z WYMUSZENIE TUYA) =====
+    async function refreshMatches() {
+        try {
+            const res = await fetch(api("/api/matches"));
+            const data = await res.json();
+            matchesCache = data.matches || [];
+            renderMatchesTable();
+        } catch(e) {
+            console.error("Błąd ładowania tabeli dopasowań:", e);
+        }
+    }
+
+    function renderMatchesTable() {
+        const tbody = document.getElementById("matches-table-body");
+        tbody.innerHTML = "";
+
+        if (matchesCache.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-muted">
+                Brak urządzeń w bazie. Zaloguj się kodem QR w zakładce "Logowanie Tuya (Kod QR)" lub kliknij "1. Pobierz z Tuya".
+            </td></tr>`;
+            document.getElementById("match-stats").textContent = "Urządzeń: 0";
+            return;
+        }
+
+        let matchedCount = 0;
+
+        for (const item of matchesCache) {
+            const isMatched = item.local_ip && item.local_ip !== "-";
+            if (isMatched) matchedCount++;
+
+            let statusBadge = "bg-secondary";
+            if (item.status.includes("stały IP")) statusBadge = "bg-success";
+            else if (item.status.includes("Wymuszony")) statusBadge = "bg-primary";
+            else if (item.status.includes("automatycznie")) statusBadge = "bg-info text-dark";
+            else if (item.status.includes("Ręcznie")) statusBadge = "bg-warning text-dark";
+
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td>
+                    <strong>${item.name || 'Tuya Device'}</strong>
+                </td>
+                <td><small class="font-monospace text-muted">${item.device_id}</small></td>
+                <td><span class="badge bg-light text-dark border">${item.category}${item.is_sub ? ' (Zigbee)' : ' (Wi-Fi)'}</span></td>
+                <td><span class="text-muted font-monospace">${item.cloud_ip || '-'}</span></td>
+                <td>
+                    <span class="badge ${item.local_ip && item.local_ip !== '-' ? 'bg-primary' : 'bg-light text-dark border'} font-monospace fs-6">
+                        ${item.local_ip || 'Brak IP'}
+                    </span>
+                </td>
+                <td><small class="font-monospace">${item.mac || '-'}</small></td>
+                <td><span class="badge ${statusBadge}">${item.status}</span></td>
+                <td class="text-end">
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-primary" title="Wybierz powiązanie z listy UniFi" onclick="openBindModal('${item.device_id}')">
+                            <i class="bi bi-link-45deg"></i> Powiąż
+                        </button>
+                        <button class="btn btn-outline-info" title="Wymuś określony lokalny IP" onclick="openForceIpModal('${item.device_id}')">
+                            <i class="bi bi-bullseye"></i> Wymuś IP
+                        </button>
+                        <button class="btn btn-outline-warning" title="Zapisz stały IP w routerze UniFi (DHCP Fixed IP)" onclick="openUnifiIpModal('${item.device_id}')">
+                            <i class="bi bi-router"></i> Zapisz w UniFi
+                        </button>
+                        <button class="btn btn-outline-secondary" title="Testuj połączenie lokalne Tuya (port 6668)" onclick="testLanConnection('${item.device_id}')">
+                            <i class="bi bi-broadcast"></i> Test LAN
+                        </button>
+                        <button class="btn btn-outline-danger" title="Rozłącz powiązanie" onclick="unbindDevice('${item.device_id}')">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        }
+
+        document.getElementById("match-stats").textContent = `Połączono: ${matchedCount} / ${matchesCache.length} urządzeń`;
+    }
+
+    // ===== POBIERANIE KLIENTÓW Z UNIFI / LAN =====
+    async function fetchNetworkClients(refresh = false) {
+        try {
+            const res = await fetch(api(`/api/network/clients?refresh=${refresh ? 'true' : 'false'}`));
+            const data = await res.json();
+            networkClientsCache = data.clients || [];
+            if (refresh) {
+                alert(`Pobrano ${networkClientsCache.length} klientów z routera UniFi oraz tablicy ARP.`);
+            }
+        } catch(e) {
+            console.error("Błąd pobierania klientów sieci:", e);
+        }
+    }
+
+    // ===== AUTOMATYCZNE ŁĄCZENIE W PARY =====
+    async function runAutoMatch() {
+        try {
+            const res = await fetch(api("/api/matches/auto"), { method: "POST" });
+            const data = await res.json();
+            if (data.success) {
+                alert(`Dopasowano ${data.matched} z ${data.total} urządzeń!`);
+                refreshMatches();
+                refreshDevices();
+            } else {
+                alert("Błąd dopasowywania: " + (data.error || "Nieznany błąd"));
+            }
+        } catch(e) {
+            alert("Błąd połączenia: " + e.message);
+        }
+    }
+
+    // ===== RĘCZNE POWIĄZANIE (BIND MODAL) =====
+    function openBindModal(deviceId) {
+        currentBindDeviceId = deviceId;
+        const dev = matchesCache.find(x => x.device_id === deviceId) || devicesCache[deviceId] || {};
+        document.getElementById("bind-target-info").innerHTML =
+            `<i class="bi bi-cpu me-1"></i>Urządzenie docelowe: <strong>${dev.name || deviceId}</strong>` +
+            ` (ID: <code>${deviceId}</code> | Chmura Tuya IP: <code>${dev.cloud_ip || dev.ip || '-'}</code>)`;
+        document.getElementById("bind-search-input").value = "";
+        renderNetworkClientsList(networkClientsCache);
+        bindModalObj.show();
+    }
+
+    function renderNetworkClientsList(clients) {
+        const tbody = document.getElementById("bind-clients-table-body");
+        tbody.innerHTML = "";
+
+        if (clients.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-muted">Brak klientów w cache. Kliknij "Odśwież sieć" powyżej.</td></tr>`;
+            return;
+        }
+
+        for (const c of clients) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td><strong>${c.name}</strong></td>
+                <td><code>${c.ip || '-'}</code></td>
+                <td><small class="font-monospace">${c.mac}</small></td>
+                <td>${c.fixed ? '<span class="badge bg-success">STAŁY IP</span>' : '<span class="badge bg-light text-dark border">DHCP</span>'}</td>
+                <td><small class="text-muted">${c.source}</small></td>
+                <td>
+                    <button class="btn btn-sm btn-primary" onclick="confirmBindSelection('${c.mac}', '${c.ip}', '${c.name.replace(/'/g, "\\'")}')">
+                        <i class="bi bi-check2"></i> Wybierz
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        }
+    }
+
+    function filterNetworkClientsList() {
+        const query = document.getElementById("bind-search-input").value.toLowerCase().trim();
+        if (!query) {
+            renderNetworkClientsList(networkClientsCache);
+            return;
+        }
+        const filtered = networkClientsCache.filter(c =>
+            (c.name && c.name.toLowerCase().includes(query)) ||
+            (c.ip && c.ip.toLowerCase().includes(query)) ||
+            (c.mac && c.mac.toLowerCase().includes(query))
+        );
+        renderNetworkClientsList(filtered);
+    }
+
+    async function confirmBindSelection(mac, ip, clientName) {
+        if (!currentBindDeviceId) return;
+        try {
+            const res = await fetch(api("/api/matches/bind"), {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    device_id: currentBindDeviceId,
+                    mac: mac,
+                    ip: ip,
+                    client_name: clientName
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                bindModalObj.hide();
+                refreshMatches();
+                refreshDevices();
+                alert(`Pomyślnie powiązano z: ${clientName} (${ip})!`);
+            } else {
+                alert("Błąd powiązania: " + data.error);
+            }
+        } catch(e) {
+            alert("Błąd połączenia: " + e.message);
+        }
+    }
+
+    // ===== ROZŁĄCZANIE POWIĄZANIA =====
+    async function unbindDevice(deviceId) {
+        if (!confirm("Czy na pewno chcesz usunąć powiązanie dla tego urządzenia?")) return;
+        try {
+            const res = await fetch(api("/api/matches/unbind"), {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ device_id: deviceId })
+            });
+            refreshMatches();
+            refreshDevices();
+        } catch(e) {
+            alert("Błąd: " + e.message);
+        }
+    }
+
+    // ===== WYMUSZANIE LOKALNEGO IP =====
+    function openForceIpModal(deviceId) {
+        const dev = matchesCache.find(x => x.device_id === deviceId) || devicesCache[deviceId] || {};
+        document.getElementById("force_ip_dev_id").value = deviceId;
+        document.getElementById("force_ip_target").value = (dev.local_ip && dev.local_ip !== "-") ? dev.local_ip : (dev.ip || "192.168.1.");
+        document.getElementById("force_ip_mac").value = (dev.mac && dev.mac !== "-") ? dev.mac : "";
+        document.getElementById("force-ip-dev-info").innerHTML =
+            `<i class="bi bi-cpu me-1"></i>Urządzenie: <strong>${dev.name || deviceId}</strong> (ID: <code>${deviceId}</code>)`;
+        forceIpModalObj.show();
+    }
+
+    async function applyForcedIp(e) {
+        e.preventDefault();
+        const devId = document.getElementById("force_ip_dev_id").value;
+        const targetIp = document.getElementById("force_ip_target").value.trim();
+        const mac = document.getElementById("force_ip_mac").value.trim();
+
+        try {
+            const res = await fetch(api("/api/matches/force_ip"), {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ device_id: devId, ip: targetIp, mac: mac })
+            });
+            const data = await res.json();
+            if (data.success) {
+                forceIpModalObj.hide();
+                refreshMatches();
+                refreshDevices();
+                alert(`Wymuszono lokalny adres IP ${targetIp} dla urządzenia!`);
+            } else {
+                alert("Błąd: " + data.error);
+            }
+        } catch(err) {
+            alert("Błąd połączenia: " + err.message);
+        }
+    }
+
+    // ===== TEST POŁĄCZENIA LAN (PORT 6668) =====
+    async function testLanConnection(deviceId) {
+        const dev = matchesCache.find(x => x.device_id === deviceId) || devicesCache[deviceId] || {};
+        const ip = dev.local_ip || dev.ip;
+        if (!ip || ip === "-") {
+            alert("Najpierw ustal lub powiąż adres IP dla tego urządzenia.");
+            return;
+        }
+
+        const bodyDiv = document.getElementById("test-lan-modal-body");
+        bodyDiv.innerHTML = `
+            <div class="text-center py-4">
+                <div class="spinner-border text-primary mb-3"></div>
+                <h5>Testowanie: ${dev.name || deviceId}</h5>
+                <p class="text-muted">Adres IP: <code>${ip}</code> &nbsp;|&nbsp; Port sterowania Tuya: <strong>6668</strong></p>
+            </div>
+        `;
+        testLanModalObj.show();
+
+        try {
+            const res = await fetch(api("/api/matches/test_lan"), {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ device_id: deviceId, ip: ip })
+            });
+            const data = await res.json();
+            const det = data.details || {};
+
+            if (data.success) {
+                let dpsHtml = "";
+                if (det.dps && Object.keys(det.dps).length > 0) {
+                    dpsHtml = `<div class="mt-3 text-start"><strong class="small text-muted">Odczytane parametry DPS:</strong><pre class="bg-light p-2 rounded small">${JSON.stringify(det.dps, null, 2)}</pre></div>`;
+                }
+
+                bodyDiv.innerHTML = `
+                    <div class="text-center py-2">
+                        <i class="bi bi-check-circle-fill text-success" style="font-size: 3.5rem;"></i>
+                        <h4 class="mt-2 text-success">POŁĄCZENIE LOKALNE UDANE!</h4>
+                        <div class="alert alert-success py-2 mt-3 text-start small">
+                            <div><strong>Urządzenie:</strong> ${dev.name || deviceId}</div>
+                            <div><strong>Lokalny IP:</strong> <code>${ip}</code></div>
+                            <div><strong>Port Tuya LAN 6668:</strong> OTWARTY (Odpowiedź: ${det.latency_ms || '-'} ms)</div>
+                        </div>
+                        ${dpsHtml}
+                    </div>
+                `;
+            } else {
+                bodyDiv.innerHTML = `
+                    <div class="text-center py-2">
+                        <i class="bi bi-x-circle-fill text-danger" style="font-size: 3.5rem;"></i>
+                        <h4 class="mt-2 text-danger">Brak połączenia lokalnego</h4>
+                        <p class="text-muted small">${det.error || 'Urządzenie nie odpowiedziało na porcie 6668 w sieci domowej.'}</p>
+                        <div class="alert alert-warning py-2 small text-start">
+                            Upewnij się, że urządzenie jest podłączone do tej samej sieci Wi-Fi oraz czy adres IP <code>${ip}</code> jest poprawny.
+                        </div>
+                    </div>
+                `;
+            }
+        } catch(err) {
+            bodyDiv.innerHTML = `<div class="alert alert-danger">Błąd testu: ${err.message}</div>`;
+        }
+    }
+
+    // ===== URZĄDZENIA (ZAKŁADKA 2) =====
+    async function refreshDevices() {
+        try {
+            const res = await fetch(api("/api/devices"));
+            devicesCache = await res.json();
+            renderDevicesTable();
+        } catch(e) {
+            console.error("Błąd ładowania urządzeń:", e);
+        }
+    }
+
+    function renderDevicesTable() {
+        const tbody = document.getElementById("devices-table-body");
+        tbody.innerHTML = "";
+        const keys = Object.keys(devicesCache);
+        if (keys.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-muted">Brak urządzeń. Zaloguj się w zakładce "Logowanie Tuya (Kod QR)" lub dodaj ręcznie.</td></tr>`;
+            return;
+        }
+
+        for (const devId of keys) {
+            const dev = devicesCache[devId];
+            const dpsEntries = dev.dps ? Object.entries(dev.dps) : [];
+
+            let dpsHtml = "";
+            if (dpsEntries.length > 0) {
+                const preview = dpsEntries.slice(0, 3);
+                dpsHtml = preview.map(([k, v]) =>
+                    `<span class="badge bg-light text-dark border badge-dps">DPS <strong>${k}</strong>: ${v}</span>`
+                ).join(" ");
+                if (dpsEntries.length > 3) {
+                    dpsHtml += ` <span class="badge bg-secondary badge-dps">+${dpsEntries.length - 3} więcej</span>`;
+                }
+                dpsHtml += ` <button class="btn btn-xs btn-link p-0 ms-1 small" onclick="openDpsPreview('${devId}')">
+                    <i class="bi bi-eye"></i> Podgląd
+                </button>`;
+            } else {
+                dpsHtml = `<span class="text-muted small">Brak danych LAN</span>
+                    <button class="btn btn-xs btn-link p-0 ms-1 small" onclick="openDpsPreview('${devId}')">
+                        <i class="bi bi-eye"></i> Sprawdź
+                    </button>`;
+            }
+
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td>
+                    <strong>${dev.name || 'Tuya Device'}</strong><br>
+                    <small class="text-muted font-monospace">${devId}</small>
+                </td>
+                <td>
+                    <span class="badge ${dev.ip ? 'bg-primary' : 'bg-danger'}">${dev.ip || 'Brak IP'}</span><br>
+                    <small class="text-muted">${dev.mac ? 'MAC: ' + dev.mac : 'Brak MAC'}</small>
+                </td>
+                <td>
+                    <small class="font-monospace text-secondary">${dev.local_key ? dev.local_key.substring(0,8) + '••••••••' : '<span class="text-danger">Brak</span>'}</small>
+                </td>
+                <td>${dpsHtml}</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-info me-1" title="Podgląd parametrów DPS" onclick="openDpsPreview('${devId}')"><i class="bi bi-eye"></i></button>
+                    <button class="btn btn-sm btn-outline-primary me-1" title="Edytuj urządzenie" onclick="openEditDevice('${devId}')"><i class="bi bi-gear"></i></button>
+                    <button class="btn btn-sm btn-outline-danger" title="Usuń" onclick="deleteDevice('${devId}')"><i class="bi bi-trash"></i></button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        }
+    }
+
+    // ===== PODGLĄD DPS =====
+    function openDpsPreview(deviceId) {
+        currentDpsDeviceId = deviceId;
+        const dev = devicesCache[deviceId] || {};
+        document.getElementById("dps-modal-title").textContent = dev.name || deviceId;
+        document.getElementById("dps-device-info").innerHTML =
+            `<i class="bi bi-cpu me-1"></i><strong>${dev.name || deviceId}</strong>` +
+            (dev.ip ? ` &nbsp;|&nbsp; IP: <code>${dev.ip}</code>` : ' &nbsp;|&nbsp; <span class="text-danger">Brak IP</span>') +
+            ` &nbsp;|&nbsp; v${dev.version || '3.3'}`;
+        document.getElementById("dps-poll-status").innerHTML = "";
+        renderDpsTable(dev.dps || {});
+        dpsPreviewModalObj.show();
+    }
+
+    function renderDpsTable(dps) {
+        const tbody = document.getElementById("dps-params-body");
+        const entries = Object.entries(dps);
+
+        if (entries.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-4">
+                <i class="bi bi-wifi-off me-2"></i>Brak danych z urządzenia.<br>
+                <small>Sprawdź IP i Local Key, następnie kliknij "Odśwież odczyt LAN".</small>
+            </td></tr>`;
+            return;
+        }
+
+        const devMappings = {};
+        for (const [mapId, m] of Object.entries(mappingsCache)) {
+            if (m.device_id === currentDpsDeviceId) {
+                devMappings[String(m.dps_key)] = m;
+            }
+        }
+
+        tbody.innerHTML = entries.map(([k, v]) => {
+            const type = typeof v;
+            let typeBadge = `<span class="badge bg-secondary">${type}</span>`;
+            if (type === 'boolean') typeBadge = `<span class="badge bg-info text-dark">bool</span>`;
+            else if (type === 'number') typeBadge = `<span class="badge bg-warning text-dark">number</span>`;
+            else if (type === 'string') typeBadge = `<span class="badge bg-light text-dark border">string</span>`;
+
+            let valDisplay = String(v);
+            if (type === 'boolean') valDisplay = v ? '<span class="text-success fw-bold">true (ON)</span>' : '<span class="text-danger fw-bold">false (OFF)</span>';
+
+            const existingMap = devMappings[k];
+            let mapCell = existingMap ? `<span class="badge bg-success mapped-badge"><i class="bi bi-check-circle me-1"></i>${existingMap.entity_name}</span>` : `<span class="text-muted small">—</span>`;
+
+            return `<tr class="dps-row">
+                <td><code class="fw-bold">${k}</code></td>
+                <td class="dps-value">${valDisplay}</td>
+                <td>${typeBadge}</td>
+                <td>${mapCell}</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-success" onclick="quickAddMapping('${currentDpsDeviceId}', '${k}', '${v}')">
+                        <i class="bi bi-plus-circle me-1"></i>Mapuj
+                    </button>
+                </td>
+            </tr>`;
+        }).join('');
+    }
+
+    async function pollDpsNow() {
+        const statusDiv = document.getElementById("dps-poll-status");
+        statusDiv.innerHTML = `<div class="alert alert-info py-2 small"><div class="spinner-border spinner-border-sm me-2"></div>Odpytuję urządzenie przez LAN...</div>`;
+
+        try {
+            const res = await fetch(api(`/api/devices/${currentDpsDeviceId}/poll`));
+            const data = await res.json();
+            if (data.dps && Object.keys(data.dps).length > 0) {
+                statusDiv.innerHTML = `<div class="alert alert-success py-2 small"><i class="bi bi-check-circle-fill me-1"></i>Odczytano ${data.count} parametrów!</div>`;
+                renderDpsTable(data.dps);
+                if (devicesCache[currentDpsDeviceId]) {
+                    devicesCache[currentDpsDeviceId].dps = data.dps;
+                }
+                renderDevicesTable();
+            } else {
+                statusDiv.innerHTML = `<div class="alert alert-danger py-2 small"><i class="bi bi-exclamation-triangle-fill me-1"></i>${data.error || 'Brak odpowiedzi'}</div>`;
+            }
+        } catch(e) {
+            statusDiv.innerHTML = `<div class="alert alert-danger py-2 small">Błąd: ${e.message}</div>`;
+        }
+    }
+
+    function quickAddMapping(deviceId, dpsKey, currentVal) {
+        dpsPreviewModalObj.hide();
+        openAddMappingModal();
+        setTimeout(() => {
+            document.getElementById("map_device_select").value = deviceId;
+            onMappingDeviceChange();
+            setTimeout(() => {
+                document.getElementById("map_dps_select").value = dpsKey;
+                const dev = devicesCache[deviceId];
+                const cleanName = (dev ? dev.name : deviceId).replace(/[^a-zA-Z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ ]/g, '').trim();
+                document.getElementById("map_entity_name").value = `${cleanName} ${dpsKey}`;
+                if (currentVal === "true" || currentVal === "false" || typeof currentVal === "boolean") {
+                    document.getElementById("map_component_type").value = "switch";
+                } else {
+                    document.getElementById("map_component_type").value = "sensor";
+                }
+            }, 100);
+        }, 300);
+    }
+
+    function openEditDevice(devId) {
+        const dev = devicesCache[devId];
+        if (!dev) return;
+        document.getElementById("deviceModalTitle").textContent = "Edycja: " + (dev.name || devId);
+        document.getElementById("dev_id").value = devId;
+        document.getElementById("dev_id").disabled = true;
+        document.getElementById("dev_name").value = dev.name || "";
+        document.getElementById("dev_ip").value = dev.ip || "";
+        document.getElementById("dev_mac").value = dev.mac || "";
+        document.getElementById("dev_key").value = dev.local_key || "";
+        document.getElementById("dev_node_id").value = dev.node_id || "";
+        document.getElementById("dev_gateway_id").value = dev.gateway_id || "";
+        document.getElementById("dev_version").value = dev.version || "3.3";
+        deviceModalObj.show();
+    }
+
+    function openAddDeviceModal() {
+        document.getElementById("deviceModalTitle").textContent = "Nowe Urządzenie Tuya";
+        document.getElementById("dev_id").value = "";
+        document.getElementById("dev_id").disabled = false;
+        document.getElementById("dev_name").value = "";
+        document.getElementById("dev_ip").value = "";
+        document.getElementById("dev_mac").value = "";
+        document.getElementById("dev_key").value = "";
+        document.getElementById("dev_node_id").value = "";
+        document.getElementById("dev_gateway_id").value = "";
+        document.getElementById("dev_version").value = "3.3";
+        deviceModalObj.show();
+    }
+
+    async function saveDeviceForm() {
+        const devId = document.getElementById("dev_id").value.trim();
+        if (!devId) { alert("ID urządzenia jest wymagane!"); return; }
+        const payload = {
+            id: devId,
+            name: document.getElementById("dev_name").value.trim() || devId,
+            ip: document.getElementById("dev_ip").value.trim(),
+            mac: document.getElementById("dev_mac").value.trim(),
+            local_key: document.getElementById("dev_key").value.trim(),
+            node_id: document.getElementById("dev_node_id").value.trim(),
+            gateway_id: document.getElementById("dev_gateway_id").value.trim(),
+            version: document.getElementById("dev_version").value,
+            dps: (devicesCache[devId] && devicesCache[devId].dps) ? devicesCache[devId].dps : {}
+        };
+        await fetch(api(`/api/devices/${devId}`), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload)
+        });
+        deviceModalObj.hide();
+        refreshDevices();
+        refreshMatches();
+    }
+
+    async function deleteDevice(devId) {
+        if (!confirm(`Czy na pewno usunąć urządzenie ${devId}?`)) return;
+        await fetch(api(`/api/devices/${devId}`), { method: "DELETE" });
+        refreshDevices();
+        refreshMatches();
+    }
+
+    // ===== STAŁE IP W UNIFI =====
+    function openUnifiIpModal(deviceId) {
+        const dev = matchesCache.find(x => x.device_id === deviceId) || devicesCache[deviceId] || {};
+        document.getElementById("unifi_ip_dev_id").value = deviceId;
+        document.getElementById("unifi_ip_dev_name").value = dev.name || "";
+        document.getElementById("unifi_ip_mac").value = (dev.mac && dev.mac !== "-") ? dev.mac : "";
+        document.getElementById("unifi_ip_target").value = (dev.local_ip && dev.local_ip !== "-") ? dev.local_ip : (dev.ip || "");
+        document.getElementById("unifi-ip-result").innerHTML = "";
+        document.getElementById("unifi-ip-dev-info").innerHTML =
+            `<i class="bi bi-cpu me-1"></i>Urządzenie: <strong>${dev.name || deviceId}</strong>` +
+            ` &nbsp;|&nbsp; Device ID: <code>${deviceId}</code>`;
+        unifiIpModalObj.show();
+    }
+
+    async function applyUnifiFixedIpFromModal(e) {
+        if (e) e.preventDefault();
+        const devId = document.getElementById("unifi_ip_dev_id").value;
+        const mac = document.getElementById("unifi_ip_mac").value.trim();
+        const ip = document.getElementById("unifi_ip_target").value.trim();
+        const name = document.getElementById("unifi_ip_dev_name").value.trim();
+        const resultDiv = document.getElementById("unifi-ip-result");
+
+        if (!mac || !ip) {
+            resultDiv.innerHTML = `<div class="alert alert-danger py-2">Podaj adres MAC oraz IP!</div>`;
+            return;
+        }
+
+        resultDiv.innerHTML = `<div class="alert alert-info py-2"><span class="spinner-border spinner-border-sm me-2"></span>Łączenie z UniFi i zapisywanie rezerwacji DHCP...</div>`;
+
+        try {
+            const res = await fetch(api("/api/unifi/set_fixed_ip"), {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ mac, ip, name, device_id: devId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                resultDiv.innerHTML = `<div class="alert alert-success py-2"><i class="bi bi-check-circle-fill me-1"></i>${data.message || "Stałe IP ustawione w UniFi!"}</div>`;
+                refreshMatches();
+                refreshDevices();
+                setTimeout(() => unifiIpModalObj.hide(), 1200);
+            } else {
+                resultDiv.innerHTML = `<div class="alert alert-danger py-2"><i class="bi bi-x-circle me-1"></i>Błąd: ${data.error || "Nieznany błąd"}</div>`;
+            }
+        } catch(e) {
+            resultDiv.innerHTML = `<div class="alert alert-danger py-2">Błąd: ${e.message}</div>`;
+        }
+    }
+
+    // ===== MAPOWANIA MQTT =====
+    async function refreshMappings() {
+        try {
+            const res = await fetch(api("/api/mappings"));
+            mappingsCache = await res.json();
+            renderMappingsTable();
+        } catch(e) { console.error(e); }
+    }
+
+    function renderMappingsTable() {
+        const tbody = document.getElementById("mappings-table-body");
+        tbody.innerHTML = "";
+        const keys = Object.keys(mappingsCache);
+        if (keys.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-muted">Brak mapowań. Kliknij "Nowe mapowanie".</td></tr>`;
+            return;
+        }
+        for (const mapId of keys) {
+            const m = mappingsCache[mapId];
+            const dev = devicesCache[m.device_id] || { name: m.device_id };
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td><strong>${dev.name}</strong><br><small class="text-muted font-monospace">${m.device_id}</small></td>
+                <td><span class="badge bg-secondary">DPS: ${m.dps_key}</span></td>
+                <td><span class="badge bg-info text-dark">${m.component.toUpperCase()}</span></td>
+                <td><strong>${m.entity_name}</strong></td>
+                <td><span class="badge bg-success">Discovery Active</span></td>
+                <td>
+                    <button class="btn btn-sm btn-outline-success me-1" title="Testuj odczyt LAN i wysyłkę do MQTT" onclick="testMapping('${mapId}')"><i class="bi bi-play-circle"></i> Test</button>
+                    <button class="btn btn-sm btn-outline-warning me-1" title="Stałe IP w UniFi" onclick="openUnifiIpModal('${m.device_id}')"><i class="bi bi-router"></i></button>
+                    <button class="btn btn-sm btn-outline-primary me-1" title="Edytuj" onclick="openEditMapping('${mapId}')"><i class="bi bi-pencil"></i></button>
+                    <button class="btn btn-sm btn-outline-danger" title="Usuń" onclick="deleteMapping('${mapId}')"><i class="bi bi-trash"></i></button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        }
+    }
+
+    async function testMapping(mapId) {
+        const m = mappingsCache[mapId] || {};
+        const bodyDiv = document.getElementById("test-mapping-modal-body");
+        const retestBtn = document.getElementById("btn-retest-mapping");
+        retestBtn.onclick = () => testMapping(mapId);
+
+        bodyDiv.innerHTML = `
+            <div class="text-center py-4">
+                <div class="spinner-border text-success mb-3"></div>
+                <h5>Testowanie mapowania: ${m.entity_name || mapId}</h5>
+                <p class="text-muted small">Odpytywanie urządzenia po LAN (auto-detekcja wersji) i wysyłka do brokera MQTT...</p>
+            </div>
+        `;
+        testMappingModalObj.show();
+
+        try {
+            const res = await fetch(api(`/api/mappings/${encodeURIComponent(mapId)}/test`), { method: "POST" });
+            const d = await res.json();
+
+            if (d.error) {
+                bodyDiv.innerHTML = `<div class="alert alert-danger">${d.error}</div>`;
+                return;
+            }
+
+            const lanBadge = d.lan_ok
+                ? `<span class="badge bg-success">OK (${d.source})</span>`
+                : `<span class="badge bg-danger">Brak odpowiedzi LAN (${d.source})</span>`;
+            const mqttBadge = d.mqtt_connected
+                ? `<span class="badge bg-success">Połączono i wysłano</span>`
+                : `<span class="badge bg-danger">Rozłączono z brokerem MQTT</span>`;
+            const valBadge = d.value_found
+                ? `<span class="badge bg-primary fs-6 font-monospace">${d.mqtt_payload}</span> <small class="text-muted">(surowe z Tuya: <code>${d.raw_value}</code>)</small>`
+                : `<span class="badge bg-warning text-dark">Brak wartości dla klucza DPS "${d.dps_key}"</span>`;
+
+            const headerAlert = d.success
+                ? `<div class="alert alert-success py-2"><i class="bi bi-check-circle-fill me-2"></i><strong>Test zakończony sukcesem!</strong> Urządzenie odpowiedziało po LAN, a wartość została wysłana do brokera MQTT.</div>`
+                : `<div class="alert alert-warning py-2"><i class="bi bi-exclamation-triangle-fill me-2"></i><strong>Uwaga:</strong> Sprawdź poniższą diagnostykę (LAN / DPS / MQTT).</div>`;
+
+            const allDpsJson = d.all_dps && Object.keys(d.all_dps).length > 0
+                ? `<pre class="bg-light p-2 rounded small mb-0">${JSON.stringify(d.all_dps, null, 2)}</pre>`
+                : `<span class="text-muted small">Brak odebranych parametrów DPS.</span>`;
+
+            bodyDiv.innerHTML = `
+                ${headerAlert}
+                <table class="table table-sm table-bordered align-middle mb-3">
+                    <tbody>
+                        <tr><th style="width: 34%">Nazwa w brokerze MQTT</th><td><strong>${d.broker_device_name || '-'}</strong></td></tr>
+                        <tr><th>Urządzenie / IP / Wersja</th><td><code>${d.device_id}</code> &nbsp;|&nbsp; IP: <code>${d.ip || 'Brak'}</code> &nbsp;|&nbsp; <strong>v${d.version || '3.3'}</strong></td></tr>
+                        <tr><th>Status odczytu LAN</th><td>${lanBadge}</td></tr>
+                        <tr><th>Zmapowany DPS &rarr; ID LAN</th><td><code>${d.dps_key}</code> &rarr; <code>${d.resolved_dps_id}</code></td></tr>
+                        <tr><th>Wartość wysłana do MQTT</th><td>${valBadge}</td></tr>
+                        <tr><th>Status brokera MQTT</th><td>${mqttBadge}</td></tr>
+                        <tr><th>Temat stanu (State Topic)</th><td><code class="small">${d.state_topic || '-'}</code></td></tr>
+                        <tr><th>Temat Discovery</th><td><code class="small">${d.discovery_topic || '-'}</code></td></tr>
+                    </tbody>
+                </table>
+                <div>
+                    <strong class="small text-muted d-block mb-1">Wszystkie odebrane parametry DPS z urządzenia:</strong>
+                    ${allDpsJson}
+                </div>
+            `;
+            refreshDevices();
+        } catch(err) {
+            bodyDiv.innerHTML = `<div class="alert alert-danger">Błąd testu: ${err.message}</div>`;
+        }
+    }
+
+    function openAddMappingModal() {
+        document.getElementById("mappingModalTitle").textContent = "Nowe mapowanie MQTT";
+        document.getElementById("edit_map_id").value = "";
+        const sel = document.getElementById("map_device_select");
+        sel.innerHTML = '<option value="">Wybierz urządzenie...</option>';
+        for (const [id, d] of Object.entries(devicesCache)) {
+            sel.innerHTML += `<option value="${id}">${d.name || id} (${d.ip || 'Brak IP'})</option>`;
+        }
+        sel.disabled = false;
+        document.getElementById("map_dps_select").innerHTML = '<option value="">Najpierw wybierz urządzenie</option>';
+        document.getElementById("map_entity_name").value = "";
+        document.getElementById("map_unit").value = "";
+        mappingModalObj.show();
+    }
+
+    function openEditMapping(mapId) {
+        const m = mappingsCache[mapId];
+        if (!m) return;
+        document.getElementById("mappingModalTitle").textContent = "Edycja mapowania MQTT";
+        document.getElementById("edit_map_id").value = mapId;
+        const sel = document.getElementById("map_device_select");
+        sel.innerHTML = '<option value="">Wybierz urządzenie...</option>';
+        for (const [id, d] of Object.entries(devicesCache)) {
+            sel.innerHTML += `<option value="${id}">${d.name || id} (${d.ip || 'Brak IP'})</option>`;
+        }
+        sel.value = m.device_id;
+        sel.disabled = true;
+        onMappingDeviceChange();
+        setTimeout(() => {
+            document.getElementById("map_dps_select").value = m.dps_key;
+            document.getElementById("map_component_type").value = m.component || "sensor";
+            document.getElementById("map_entity_name").value = m.entity_name || "";
+            document.getElementById("map_unit").value = (m.extra && m.extra.unit) ? m.extra.unit : "";
+        }, 100);
+        mappingModalObj.show();
+    }
+
+    function onMappingDeviceChange() {
+        const devId = document.getElementById("map_device_select").value;
+        const dev = devicesCache[devId];
+        const dpsSel = document.getElementById("map_dps_select");
+        dpsSel.innerHTML = "";
+        if (dev && dev.dps && Object.keys(dev.dps).length > 0) {
+            for (const [k, v] of Object.entries(dev.dps)) {
+                dpsSel.innerHTML += `<option value="${k}">DPS ${k} (Wartość: ${v})</option>`;
+            }
+        } else {
+            dpsSel.innerHTML += `<option value="1">DPS 1 (Zwykle On/Off)</option>`;
+            dpsSel.innerHTML += `<option value="2">DPS 2 (Tryb / Jasność)</option>`;
+            dpsSel.innerHTML += `<option value="presence_state">presence_state (Obecność)</option>`;
+        }
+        dpsSel.innerHTML += `<option value="custom">Inny DPS (ręczny)</option>`;
+    }
+
+    async function saveNewMapping() {
+        const editId = document.getElementById("edit_map_id").value;
+        const devId = document.getElementById("map_device_select").value;
+        const dps = document.getElementById("map_dps_select").value;
+        const comp = document.getElementById("map_component_type").value;
+        const name = document.getElementById("map_entity_name").value;
+        const unit = document.getElementById("map_unit").value;
+        if (!devId || !dps || !comp || !name) { alert("Wypełnij wymagane pola!"); return; }
+        const mapId = editId ? editId : `${devId}_${dps}_${comp}`;
+        await fetch(api("/api/mappings"), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ id: mapId, device_id: devId, dps_key: dps, component: comp, entity_name: name, extra: { unit } })
+        });
+        mappingModalObj.hide();
+        refreshMappings();
+    }
+
+    async function deleteMapping(mapId) {
+        if (!confirm("Czy na pewno usunąć tę encję z Home Assistanta?")) return;
+        await fetch(api(`/api/mappings/${mapId}`), { method: "DELETE" });
+        refreshMappings();
+    }
+
+    // ===== LOGOWANIE QR TUYA =====
+    let pollTimer = null;
+
+    async function startTuyaExtractor() {
+        const userCode = document.getElementById("tuya_user_code").value.trim();
+        const schema = document.getElementById("tuya_app_schema").value;
+        const box = document.getElementById("qr-display-box");
+        const indicator = document.getElementById("qr-status-indicator");
+        if (!userCode) { alert("Podaj User Code z aplikacji!"); return; }
+        if (pollTimer) clearInterval(pollTimer);
+        box.innerHTML = `<div class="spinner-border text-primary my-4"></div><p>Pobieranie kodu QR...</p>`;
+        indicator.innerHTML = "";
+        try {
+            const res = await fetch(api("/api/tuya/qr/generate"), {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ user_code: userCode, schema })
+            });
+            const data = await res.json();
+            if (data.success && data.qr_image) {
+                box.innerHTML = `
+                    <img src="${data.qr_image}" alt="Kod QR Tuya" class="img-fluid" style="max-width:250px;">
+                    <div class="mt-2 text-primary fw-bold"><i class="bi bi-phone"></i> Zeskanuj w aplikacji ${schema === 'smartlife' ? 'Smart Life' : 'Tuya Smart'}</div>
+                `;
+                indicator.innerHTML = `<div class="alert alert-warning py-2 small"><i class="bi bi-hourglass-split"></i> Oczekiwanie na potwierdzenie w telefonie...</div>`;
+                pollTimer = setInterval(async () => {
+                    try {
+                        const sRes = await fetch(api(`/api/tuya/qr/status?token=${data.token}`));
+                        const sData = await sRes.json();
+                        if (sData.status === "confirmed") {
+                            clearInterval(pollTimer);
+                            indicator.innerHTML = `<div class="alert alert-success py-2 fw-bold"><i class="bi bi-check-circle-fill"></i> Zalogowano! Pobrano ${sData.count} urządzeń.</div>`;
+                            refreshDevices();
+                            refreshMatches();
+                            setTimeout(() => { document.getElementById("match-tab").click(); }, 1500);
+                        } else if (sData.status === "scanned") {
+                            indicator.innerHTML = `<div class="alert alert-info py-2 small"><i class="bi bi-qr-code"></i> Zeskanowano! Potwierdź logowanie w telefonie.</div>`;
+                        }
+                    } catch(e) { console.error(e); }
+                }, 2000);
+            } else {
+                box.innerHTML = `<div class="alert alert-danger">Błąd: ${data.error || "Nie udało się wygenerować kodu"}</div>`;
+            }
+        } catch(e) {
+            box.innerHTML = `<div class="alert alert-danger">Błąd połączenia: ${e.message}</div>`;
+        }
+    }
+
+    async function refreshCloudDevices() {
+        try {
+            const res = await fetch(api("/api/tuya/refresh_cloud"), { method: "POST" });
+            const data = await res.json();
+            if (data.success) {
+                alert(`Pobrano i odświeżono ${data.count} urządzeń z chmury Tuya!`);
+                refreshDevices();
+                refreshMatches();
+            } else {
+                alert("Błąd: " + (data.error || "Brak aktywnej sesji Tuya. Zaloguj się kodem QR."));
+            }
+        } catch(e) {
+            alert("Błąd: " + e.message);
+        }
+    }
+
+    function handleImportJson(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const parsed = JSON.parse(e.target.result);
+                const res = await fetch(api("/api/devices/import_json"), {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify(parsed)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert(`Zaimportowano ${data.count} urządzeń!`);
+                    refreshDevices();
+                    refreshMatches();
+                } else {
+                    alert("Błąd importu: " + data.error);
+                }
+            } catch(err) {
+                alert("Nieprawidłowy plik JSON: " + err.message);
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    // ===== USTAWIENIA =====
+    async function loadSettings() {
+        try {
+            const res = await fetch(api("/api/settings"));
+            const data = await res.json();
+            if (data) {
+                document.getElementById("unifi_host").value = data.unifi_host || "";
+                document.getElementById("unifi_port").value = data.unifi_port || 443;
+                document.getElementById("unifi_api_key").value = data.unifi_api_key || "";
+                document.getElementById("unifi_user").value = data.unifi_user || "";
+                document.getElementById("unifi_password").value = data.unifi_password || "";
+                document.getElementById("unifi_site").value = data.unifi_site || "default";
+                document.getElementById("unifi_verify_ssl").checked = !!data.unifi_verify_ssl;
+
+                document.getElementById("mqtt_host").value = data.mqtt_host || "192.168.1.21";
+                document.getElementById("mqtt_port").value = data.mqtt_port || 1883;
+                document.getElementById("mqtt_user").value = data.mqtt_user || "";
+                document.getElementById("mqtt_password").value = data.mqtt_password || "";
+
+                if (data.tuya_user_code) {
+                    document.getElementById("tuya_user_code").value = data.tuya_user_code;
+                }
+            }
+        } catch(e) { console.error(e); }
+    }
+
+    async function saveUnifiSettings(e) {
+        e.preventDefault();
+        await fetch(api("/api/settings"), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                unifi_host: document.getElementById("unifi_host").value,
+                unifi_port: parseInt(document.getElementById("unifi_port").value) || 443,
+                unifi_api_key: document.getElementById("unifi_api_key").value,
+                unifi_user: document.getElementById("unifi_user").value,
+                unifi_password: document.getElementById("unifi_password").value,
+                unifi_site: document.getElementById("unifi_site").value,
+                unifi_verify_ssl: document.getElementById("unifi_verify_ssl").checked
+            })
+        });
+        alert("Zapisano ustawienia UniFi!");
+    }
+
+    async function testUnifiConnection() {
+        try {
+            const res = await fetch(api("/api/unifi/test"));
+            const result = await res.json();
+            alert(result.success ? "Połączenie z UniFi powiodło się!" : "Błąd: " + result.error);
+        } catch(e) { alert("Błąd: " + e.message); }
+    }
+
+    async function saveMqttSettings(e) {
+        e.preventDefault();
+        await fetch(api("/api/settings"), {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                mqtt_host: document.getElementById("mqtt_host").value,
+                mqtt_port: parseInt(document.getElementById("mqtt_port").value) || 1883,
+                mqtt_user: document.getElementById("mqtt_user").value,
+                mqtt_password: document.getElementById("mqtt_password").value
+            })
+        });
+        alert("Zapisano ustawienia MQTT! Zrestartuj dodatek, aby zastosować.");
+    }
+</script>
+</body>
+</html>
