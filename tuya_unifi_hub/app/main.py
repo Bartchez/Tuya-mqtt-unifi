@@ -94,11 +94,15 @@ def on_mqtt_command(device_id: str, dps_key: str, payload_str: str):
     custom_off = (matched_extra.get("payload_off") or "").strip().upper()
     p_up = payload_str.strip().upper()
 
-    if p_up in ["ON", "TRUE"] or (custom_on and p_up == custom_on):
+    if p_up in ["ON", "TRUE", "1"] or (custom_on and p_up == custom_on):
         val = True
-    elif p_up in ["OFF", "FALSE"] or (custom_off and p_up == custom_off):
+    elif p_up in ["OFF", "FALSE", "0"] or (custom_off and p_up == custom_off):
         val = False
-    tuya_local.send_dps_command(device_id, {str(dps_key): val})
+    threading.Thread(
+        target=tuya_local.send_dps_command,
+        args=(device_id, {str(dps_key): val}),
+        daemon=True
+    ).start()
 
 def publish_all_mappings():
     """Republuje wszystkie discovery i ostatnie stany DPS po połączeniu z MQTT."""

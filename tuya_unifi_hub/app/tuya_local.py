@@ -171,12 +171,7 @@ class TuyaLocalManager:
         self.running = False
 
     def send_dps_command(self, device_id: str, dps_updates: dict) -> bool:
-        """Wysyła polecenie zmiany parametrów (DPS) bezpośrednio do urządzenia przez LAN."""
-        client = self.device_clients.get(device_id)
-        if not client:
-            logger.error(f"Brak polaczenia lokalnego dla urzadzenia {device_id} (sprawdz IP i local_key)")
-            return False
-
+        """Wysyła polecenie zmiany parametrów (DPS) bezpośrednio do urządzenia przez LAN (obsługuje 3.1, 3.3, 3.4, 3.5 oraz sub-devices)."""
         dev_info = self.devices.get(device_id, {})
         available_dps = dev_info.get("dps", {})
         translated_updates = {}
@@ -184,18 +179,83 @@ class TuyaLocalManager:
             resolved_id = self.resolve_dps_id(k, available_dps)
             translated_updates[resolved_id] = v
 
-        try:
-            logger.info(f"Wysylanie lokalnego polecenia do {device_id}: {translated_updates}")
-            payload = client.generate_payload(tinytuya.CONTROL, translated_updates)
-            client.send(payload)
-            time.sleep(0.1)
-            status = client.status()
-            if status and isinstance(status, dict) and "dps" in status:
-                self.on_status_update(device_id, status["dps"])
-            return True
-        except Exception as e:
-            logger.error(f"Blad wysylania komendy do {device_id}: {e}")
+        node_id = dev_info.get("node_id")
+        ip = dev_info.get("ip")
+        local_key = dev_info.get("local_key")
+
+        # 1. Urządzenia podbramkowe (Zigbee / BLE)
+        if node_id:
+            client = self.device_clients.get(device_id)
+            if not client:
+                logger.error(f"Brak klienta podbramkowego dla {device_id}")
+                return False
+            try:
+                logger.info(f"Wysylanie komendy podbramkowej do {device_id}: {translated_updates}")
+                client.set_socketTimeout(2.0)
+                client.set_socketRetryLimit(1)
+                res = client.set_multiple_values(translated_updates)
+                logger.info(f"Odpowiedz podbramkowa {device_id}: {res}")
+                time.sleep(0.15)
+                status = client.status()
+                if status and isinstance(status, dict) and "dps" in status:
+                    self.on_status_update(device_id, status["dps"])
+                return True
+            except Exception as e:
+                logger.error(f"Blad wysylania komendy podbramkowej do {device_id}: {e}")
+                return False
+
+        # 2. Standardowe urządzenia Wi-Fi (z auto-detekcją wersji 3.4 / 3.3 / 3.5 / 3.1)
+        if not ip or not local_key:
+            logger.error(f"Brak IP lub local_key dla urzadzenia {device_id}")
             return False
+
+        try:
+            current_ver = float(dev_info.get("version", 3.3))
+        except (ValueError, TypeError):
+            current_ver = 3.3
+
+        versions_to_try = [current_ver, 3.4, 3.3, 3.5, 3.1]
+        seen = set()
+        versions_to_try = [v for v in versions_to_try if not (v in seen or seen.add(v))]
+
+        for v in versions_to_try:
+            try:
+                logger.info(f"Wysylanie lokalnego polecenia do {device_id} ({ip}, v{v}): {translated_updates}")
+                d = tinytuya.OutletDevice(device_id, ip, local_key)
+                d.set_version(float(v))
+                d.set_socketTimeout(2.0)
+                d.set_socketRetryLimit(1)
+                d.set_socketPersistent(False)
+
+                res = d.set_multiple_values(translated_updates)
+                logger.info(f"Odpowiedz Tuya LAN {device_id} (v{v}): {res}")
+
+                if isinstance(res, dict) and "Error" in res:
+                    logger.warning(f"Komenda v{v} dla {device_id} zwrocila blad: {res}")
+                    continue
+
+                if abs(v - current_ver) >= 0.01:
+                    dev_info["version"] = str(v)
+                    if self.on_version_detected:
+                        self.on_version_detected(device_id, str(v))
+
+                # Odczytaj aktualny stan i opublikuj do MQTT
+                if isinstance(res, dict) and "dps" in res and res["dps"]:
+                    self.on_status_update(device_id, res["dps"])
+                else:
+                    time.sleep(0.15)
+                    status = d.status()
+                    if isinstance(status, dict) and "dps" in status and status["dps"]:
+                        self.on_status_update(device_id, status["dps"])
+                    else:
+                        # Fallback: opublikuj przynajmniej wysłaną zmianę
+                        self.on_status_update(device_id, translated_updates)
+                return True
+            except Exception as e:
+                logger.warning(f"Blad wysylania komendy (v{v}) do {device_id}: {e}")
+
+        logger.error(f"Nie udalo sie wyslac komendy do {device_id} ({ip}) w zadnej wersji protokolu.")
+        return False
 
     @staticmethod
     def _is_port_open(ip: str, port: int = 6668, timeout: float = 1.0) -> bool:
