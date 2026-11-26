@@ -88,10 +88,10 @@ class TuyaLocalKeyExtractorService:
                 devices_map = getattr(self.manager, "device_map", {})
                 logger.info(f"Pobrano {len(devices_map)} urzadzen z Tuya!")
 
-                # Identyfikacja bramek (gateways) - zgodnie z extractor.py
+                # Identyfikacja bramek (gateways) - bramka może mieć własny node_id, ale nie ma gateway_id/parent_id
                 gateways = {}
                 for dev_id, dev in devices_map.items():
-                    if not getattr(dev, "node_id", ""):
+                    if not (getattr(dev, "gateway_id", "") or getattr(dev, "parent_id", "")):
                         gateways[dev_id] = dev
 
                 devices_parsed = []
@@ -159,7 +159,7 @@ class TuyaLocalKeyExtractorService:
             devices_map = getattr(self.manager, "device_map", {})
             gateways = {}
             for dev_id, dev in devices_map.items():
-                if not getattr(dev, "node_id", ""):
+                if not (getattr(dev, "gateway_id", "") or getattr(dev, "parent_id", "")):
                     gateways[dev_id] = dev
 
             result = []

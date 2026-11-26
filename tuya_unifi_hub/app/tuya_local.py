@@ -97,24 +97,24 @@ class TuyaLocalManager:
             self.devices = devices
             self.device_clients.clear()
 
-            # Najpierw stwórz klientów dla bramek (urządzenia posiadające bezpośredni IP)
+            # Najpierw stwórz klientów dla bramek (urządzenia posiadające bezpośredni IP i brak gateway_id)
             gateways = {}
             for dev_id, info in self.devices.items():
-                ip = info.get("ip")
-                local_key = info.get("local_key")
-                node_id = info.get("node_id")
+                ip = (info.get("ip") or "").strip()
+                local_key = (info.get("local_key") or "").strip()
+                gw_id = (info.get("gateway_id") or "").strip()
                 try:
                     version = float(info.get("version", 3.3))
                 except (ValueError, TypeError):
                     version = 3.3
 
-                if ip and local_key and not node_id:
+                if ip and local_key and not gw_id:
                     try:
                         gw = tinytuya.Device(dev_id, ip, local_key)
                         gw.set_version(version)
                         gw.set_socketTimeout(1.5)
                         gw.set_socketRetryLimit(1)
-                        gw.set_socketPersistent(False)
+                        gw.set_socketPersistent(True)
                         gateways[dev_id] = gw
                         self.device_clients[dev_id] = gw
                     except Exception as e:
@@ -192,11 +192,12 @@ class TuyaLocalManager:
             translated_updates[resolved_id] = v
 
         node_id = (dev_info.get("node_id") or "").strip()
+        gw_id_raw = (dev_info.get("gateway_id") or "").strip()
         ip = (dev_info.get("ip") or "").strip()
         local_key = (dev_info.get("local_key") or "").strip()
 
         # 1. Urządzenia podbramkowe (Zigbee / BLE) z auto-detekcją wersji protokołu bramki
-        if node_id:
+        if node_id and gw_id_raw and gw_id_raw != device_id:
             gw_id, gw_ip, gw_key, gw_ver = self._get_gateway_conn_params(dev_info)
             if not gw_id or not gw_ip or not gw_key:
                 logger.error(f"Brak danych bramki dla sub-device {device_id} (gw_id={gw_id}, gw_ip={gw_ip})")
@@ -312,12 +313,13 @@ class TuyaLocalManager:
 
     def poll_device_status(self, device_id: str) -> dict:
         info = self.devices.get(device_id, {})
-        ip = info.get("ip")
-        local_key = info.get("local_key")
-        node_id = info.get("node_id")
+        ip = (info.get("ip") or "").strip()
+        local_key = (info.get("local_key") or "").strip()
+        node_id = (info.get("node_id") or "").strip()
+        gw_id_raw = (info.get("gateway_id") or "").strip()
 
         # Urządzenia podbramkowe (Zigbee/BLE) przez bramkę z auto-detekcją wersji protokołu
-        if node_id:
+        if node_id and gw_id_raw and gw_id_raw != device_id:
             gw_id, gw_ip, gw_key, gw_ver = self._get_gateway_conn_params(info)
             if not gw_id or not gw_ip or not gw_key:
                 return {}
