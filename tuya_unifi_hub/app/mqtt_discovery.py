@@ -60,6 +60,33 @@ class MQTTDiscoveryBuilder:
         custom_on = (extra_options.get("payload_on") or "").strip() or "ON"
         custom_off = (extra_options.get("payload_off") or "").strip() or "OFF"
 
+        if component == "switch":
+            sw_uid = f"tuya_{device_id}_map_{dps_key}_ch-1"
+            sw_disc_topic = f"homeassistant/switch/{sw_uid}/config"
+            sw_cfg = {
+                "device": {
+                    "name": entity_display_name or dev_name,
+                    "mdl": "r1s1_wp",
+                    "ids": f"tuya_{device_id}_{dps_key}",
+                    "mf": "F&F Filipowski Sp. k.",
+                    "hw": "0.1",
+                    "sw": f"v{proto_ver}"
+                },
+                "name": "",
+                "uniq_id": sw_uid,
+                "ret": False,
+                "val_tpl": "{{value_json.RCH1|default('')}}",
+                "stat_t": state_topic,
+                "avty_t": lwt_topic,
+                "cmd_t": cmd_topic,
+                "opt": False,
+                "pl_on": "1",
+                "pl_off": "0",
+                "stat_on": "1",
+                "stat_off": "0"
+            }
+            return sw_disc_topic, sw_cfg
+
         if component in ["sensor", "binary_sensor"]:
             unit = extra_options.get("unit", "")
             dev_class = extra_options.get("device_class", "")
@@ -70,15 +97,6 @@ class MQTTDiscoveryBuilder:
             if component == "binary_sensor":
                 config["payload_on"] = custom_on
                 config["payload_off"] = custom_off
-
-        elif component == "switch":
-            config.update({
-                "command_topic": cmd_topic,
-                "payload_on": custom_on,
-                "payload_off": custom_off,
-                "state_on": custom_on,
-                "state_off": custom_off
-            })
 
         elif component == "light":
             config.update({

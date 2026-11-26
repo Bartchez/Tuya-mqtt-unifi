@@ -83,11 +83,16 @@ class MQTTService:
             self.client.publish("tuya_esp/status", "online", qos=1, retain=True)
 
     @staticmethod
-    def format_mapped_payload(value: Any, extra_options: Optional[dict] = None) -> str:
+    def format_mapped_payload(value: Any, extra_options: Optional[dict] = None, component: str = "sensor") -> str:
         """Konwertuje surową wartość DPS na payload MQTT z uwzględnieniem własnych zamian użytkownika."""
         extra = extra_options or {}
         raw_str = str(value).strip()
         raw_low = raw_str.lower()
+
+        # Dla switcha (format F&Home r1s1_wp): JSON {"RCH1":"1"} lub {"RCH1":"0"}
+        if component == "switch":
+            is_on = (value is True) or (raw_low in ["true", "presence", "present", "motion", "on", "1"])
+            return json.dumps({"RCH1": "1" if is_on else "0"})
 
         # 1. Własna tabela zamian "klucz=wartość, klucz2=wartość2" (np. "presence=true, none=false")
         value_map_str = (extra.get("value_map") or "").strip()
@@ -111,8 +116,8 @@ class MQTTService:
 
         return raw_str
 
-    def publish_mapped_value(self, device_id: str, dps_key: str, value: Any, extra_options: Optional[dict] = None) -> str:
-        payload = self.format_mapped_payload(value, extra_options)
+    def publish_mapped_value(self, device_id: str, dps_key: str, value: Any, extra_options: Optional[dict] = None, component: str = "sensor") -> str:
+        payload = self.format_mapped_payload(value, extra_options, component=component)
         if not self.client or not self.is_connected:
             return payload
 

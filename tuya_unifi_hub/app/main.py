@@ -68,7 +68,7 @@ def on_local_status_update(device_id: str, dps: dict):
             dps_k = str(m.get("dps_key"))
             val = TuyaLocalManager.resolve_dps_value(dps, dps_k)
             if val is not None:
-                mqtt_service.publish_mapped_value(device_id, dps_k, val, m.get("extra", {}))
+                mqtt_service.publish_mapped_value(device_id, dps_k, val, m.get("extra", {}), component=m.get("component", "sensor"))
 
 def on_version_detected(device_id: str, version_str: str):
     if device_id in devices and str(devices[device_id].get("version", "")) != str(version_str):
@@ -133,7 +133,7 @@ def publish_all_mappings():
             dps_k = str(m.get("dps_key"))
             val = TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
             if val is not None:
-                mqtt_service.publish_mapped_value(m["device_id"], dps_k, val, m.get("extra", {}))
+                mqtt_service.publish_mapped_value(m["device_id"], dps_k, val, m.get("extra", {}), component=m.get("component", "sensor"))
         except Exception as e:
             logger.error(f"Blad republowania mapowania {m}: {e}")
     
@@ -283,7 +283,7 @@ async def create_mapping(req: Request):
     dps_k = str(body["dps_key"])
     val = TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
     if val is not None:
-        mqtt_service.publish_mapped_value(dev_id, dps_k, val, extra)
+        mqtt_service.publish_mapped_value(dev_id, dps_k, val, extra, component=body.get("component", "sensor"))
 
     # W tle odpytaj urządzenie przez LAN, aby zaktualizować świeżą wartością
     def _bg_poll(target_dev_id: str):
@@ -348,7 +348,7 @@ async def test_mapping(map_id: str):
     extra["version"] = dev.get("version", "3.3")
 
     # Wyznacz dokładny payload wysyłany do MQTT (z uwzględnieniem własnych zamian)
-    mqtt_payload = MQTTService.format_mapped_payload(raw_val, extra) if value_found else None
+    mqtt_payload = MQTTService.format_mapped_payload(raw_val, extra, component=m.get("component", "sensor")) if value_found else None
 
     discovery_topic, cfg = MQTTDiscoveryBuilder.build_config(
         component=m["component"],
@@ -364,7 +364,7 @@ async def test_mapping(map_id: str):
         mqtt_service.publish_discovery(discovery_topic, cfg)
         mqtt_service.register_command_handler(dev_id, on_mqtt_command)
         if value_found:
-            mqtt_service.publish_mapped_value(dev_id, dps_k, raw_val, extra)
+            mqtt_service.publish_mapped_value(dev_id, dps_k, raw_val, extra, component=m.get("component", "sensor"))
 
     return {
         "success": lan_ok and mqtt_connected and value_found,
@@ -380,10 +380,10 @@ async def test_mapping(map_id: str):
         "resolved_dps_id": resolved_id,
         "raw_value": raw_val,
         "mqtt_payload": mqtt_payload,
-        "state_topic": cfg.get("state_topic"),
+        "state_topic": cfg.get("state_topic") or cfg.get("stat_t"),
         "discovery_topic": discovery_topic,
         "broker_device_name": cfg.get("device", {}).get("name"),
-        "broker_entity_name": cfg.get("name"),
+        "broker_entity_name": cfg.get("name") or entity_name,
         "all_dps": active_dps,
     }
 
@@ -442,11 +442,11 @@ async def force_publish_mapping(map_id: str, req: Request):
     mqtt_service.publish_status_online()
     mqtt_service.publish_discovery(discovery_topic, cfg)
     mqtt_service.register_command_handler(dev_id, on_mqtt_command)
-    sent_payload = mqtt_service.publish_mapped_value(dev_id, dps_k, val_to_send, extra)
+    sent_payload = mqtt_service.publish_mapped_value(dev_id, dps_k, val_to_send, extra, component=m.get("component", "sensor"))
 
     return {
         "success": True,
-        "topic": cfg.get("state_topic"),
+        "topic": cfg.get("state_topic") or cfg.get("stat_t"),
         "payload": sent_payload,
         "source": source
     }
