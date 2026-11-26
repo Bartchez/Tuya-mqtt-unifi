@@ -68,7 +68,7 @@ def on_local_status_update(device_id: str, dps: dict):
             dps_k = str(m.get("dps_key"))
             val = TuyaLocalManager.resolve_dps_value(dps, dps_k)
             if val is not None:
-                mqtt_service.publish_mapped_value(device_id, dps_k, val)
+                mqtt_service.publish_mapped_value(device_id, dps_k, val, m.get("extra", {}))
 
 def on_version_detected(device_id: str, version_str: str):
     if device_id in devices and str(devices[device_id].get("version", "")) != str(version_str):
@@ -84,9 +84,19 @@ tuya_local = TuyaLocalManager(
 def on_mqtt_command(device_id: str, dps_key: str, payload_str: str):
     logger.info(f"Odebrano rozkaz MQTT dla {device_id} (DPS: {dps_key}): {payload_str}")
     val = payload_str
-    if payload_str.upper() in ["ON", "TRUE"]:
+    # Sprawdź własne payload_on / payload_off z mapowania
+    matched_extra = {}
+    for m in mappings.values():
+        if m.get("device_id") == device_id and str(m.get("dps_key")) == str(dps_key):
+            matched_extra = m.get("extra", {}) or {}
+            break
+    custom_on = (matched_extra.get("payload_on") or "").strip().upper()
+    custom_off = (matched_extra.get("payload_off") or "").strip().upper()
+    p_up = payload_str.strip().upper()
+
+    if p_up in ["ON", "TRUE"] or (custom_on and p_up == custom_on):
         val = True
-    elif payload_str.upper() in ["OFF", "FALSE"]:
+    elif p_up in ["OFF", "FALSE"] or (custom_off and p_up == custom_off):
         val = False
     tuya_local.send_dps_command(device_id, {str(dps_key): val})
 
@@ -119,7 +129,7 @@ def publish_all_mappings():
             dps_k = str(m.get("dps_key"))
             val = TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
             if val is not None:
-                mqtt_service.publish_mapped_value(m["device_id"], dps_k, val)
+                mqtt_service.publish_mapped_value(m["device_id"], dps_k, val, m.get("extra", {}))
         except Exception as e:
             logger.error(f"Blad republowania mapowania {m}: {e}")
     
@@ -269,7 +279,7 @@ async def create_mapping(req: Request):
     dps_k = str(body["dps_key"])
     val = TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
     if val is not None:
-        mqtt_service.publish_mapped_value(dev_id, dps_k, val)
+        mqtt_service.publish_mapped_value(dev_id, dps_k, val, extra)
 
     # W tle odpytaj urządzenie przez LAN, aby zaktualizować świeżą wartością
     def _bg_poll(target_dev_id: str):
@@ -329,21 +339,13 @@ async def test_mapping(map_id: str):
     raw_val = TuyaLocalManager.resolve_dps_value(active_dps, dps_k)
     value_found = raw_val is not None
 
-    # Wyznacz dokładny payload wysyłany do MQTT
-    mqtt_payload = None
-    if value_found:
-        if isinstance(raw_val, bool):
-            mqtt_payload = "ON" if raw_val else "OFF"
-        elif str(raw_val).lower() in ["true", "presence", "motion", "on", "1"]:
-            mqtt_payload = "ON"
-        elif str(raw_val).lower() in ["false", "none", "off", "0"]:
-            mqtt_payload = "OFF"
-        else:
-            mqtt_payload = str(raw_val)
-
     # 2. Republuj Discovery z aktualną nazwą z mapowania i wyślij wartość do MQTT
     extra = dict(m.get("extra", {}) or {})
     extra["version"] = dev.get("version", "3.3")
+
+    # Wyznacz dokładny payload wysyłany do MQTT (z uwzględnieniem własnych zamian)
+    mqtt_payload = MQTTService.format_mapped_payload(raw_val, extra) if value_found else None
+
     discovery_topic, cfg = MQTTDiscoveryBuilder.build_config(
         component=m["component"],
         device_id=dev_id,
@@ -358,7 +360,7 @@ async def test_mapping(map_id: str):
         mqtt_service.publish_discovery(discovery_topic, cfg)
         mqtt_service.register_command_handler(dev_id, on_mqtt_command)
         if value_found:
-            mqtt_service.publish_mapped_value(dev_id, dps_k, raw_val)
+            mqtt_service.publish_mapped_value(dev_id, dps_k, raw_val, extra)
 
     return {
         "success": lan_ok and mqtt_connected and value_found,
@@ -436,16 +438,7 @@ async def force_publish_mapping(map_id: str, req: Request):
     mqtt_service.publish_status_online()
     mqtt_service.publish_discovery(discovery_topic, cfg)
     mqtt_service.register_command_handler(dev_id, on_mqtt_command)
-    mqtt_service.publish_mapped_value(dev_id, dps_k, val_to_send)
-
-    if isinstance(val_to_send, bool):
-        sent_payload = "ON" if val_to_send else "OFF"
-    elif str(val_to_send).lower() in ["true", "presence", "motion", "on", "1"]:
-        sent_payload = "ON"
-    elif str(val_to_send).lower() in ["false", "none", "off", "0"]:
-        sent_payload = "OFF"
-    else:
-        sent_payload = str(val_to_send)
+    sent_payload = mqtt_service.publish_mapped_value(dev_id, dps_k, val_to_send, extra)
 
     return {
         "success": True,

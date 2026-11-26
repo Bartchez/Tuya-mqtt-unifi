@@ -575,6 +575,22 @@
                         <label class="form-label">Jednostka miary (opcjonalnie)</label>
                         <input type="text" class="form-control" id="map_unit" placeholder="np. °C, W, %, V, cm">
                     </div>
+                    <hr class="my-2">
+                    <div class="small fw-bold text-primary mb-2"><i class="bi bi-arrow-left-right me-1"></i>Zamiana wartości wysyłanych do MQTT (opcjonalnie)</div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label class="form-label small mb-1">Gdy ON / presence / true &rarr; wyślij:</label>
+                            <input type="text" class="form-control form-control-sm" id="map_payload_on" placeholder="domyślnie: ON (np. true, 1)">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small mb-1">Gdy OFF / none / false &rarr; wyślij:</label>
+                            <input type="text" class="form-control form-control-sm" id="map_payload_off" placeholder="domyślnie: OFF (np. false, 0)">
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small mb-1">Własne reguły zamiany (<code>z=na</code>, po przecinku):</label>
+                        <input type="text" class="form-control form-control-sm font-monospace" id="map_value_map" placeholder="np. presence=true, none=false, small_move=true">
+                    </div>
                 </form>
             </div>
             <div class="modal-footer">
@@ -1304,6 +1320,9 @@
                     const cleanName = (dev.name || deviceId).replace(/[^a-zA-Z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ _-]/g, '').trim();
                     document.getElementById("map_entity_name").value = `${cleanName} ${dpsKey}`;
                     document.getElementById("map_unit").value = "";
+                    document.getElementById("map_payload_on").value = "";
+                    document.getElementById("map_payload_off").value = "";
+                    document.getElementById("map_value_map").value = "";
 
                     if (currentVal === true || currentVal === false || currentVal === "true" || currentVal === "false") {
                         document.getElementById("map_component_type").value = "switch";
@@ -1476,10 +1495,19 @@
         for (const mapId of keys) {
             const m = mappingsCache[mapId];
             const dev = devicesCache[m.device_id] || { name: m.device_id };
+            const ex = m.extra || {};
+            let overrideBadges = "";
+            if (ex.payload_on || ex.payload_off || ex.value_map) {
+                const parts = [];
+                if (ex.payload_on) parts.push(`ON→${ex.payload_on}`);
+                if (ex.payload_off) parts.push(`OFF→${ex.payload_off}`);
+                if (ex.value_map) parts.push(ex.value_map);
+                overrideBadges = `<br><small class="text-primary font-monospace">${parts.join(" | ")}</small>`;
+            }
             const tr = document.createElement("tr");
             tr.innerHTML = `
                 <td><strong>${dev.name}</strong><br><small class="text-muted font-monospace">${m.device_id}</small></td>
-                <td><span class="badge bg-secondary">DPS: ${m.dps_key}</span></td>
+                <td><span class="badge bg-secondary">DPS: ${m.dps_key}</span>${overrideBadges}</td>
                 <td><span class="badge bg-info text-dark">${m.component.toUpperCase()}</span></td>
                 <td><strong>${m.entity_name}</strong></td>
                 <td><span class="badge bg-success">Discovery Active</span></td>
@@ -1613,6 +1641,9 @@
         document.getElementById("map_dps_select").innerHTML = '<option value="">Najpierw wybierz urządzenie</option>';
         document.getElementById("map_entity_name").value = "";
         document.getElementById("map_unit").value = "";
+        document.getElementById("map_payload_on").value = "";
+        document.getElementById("map_payload_off").value = "";
+        document.getElementById("map_value_map").value = "";
         mappingModalObj.show();
     }
 
@@ -1634,6 +1665,9 @@
             document.getElementById("map_component_type").value = m.component || "sensor";
             document.getElementById("map_entity_name").value = m.entity_name || "";
             document.getElementById("map_unit").value = (m.extra && m.extra.unit) ? m.extra.unit : "";
+            document.getElementById("map_payload_on").value = (m.extra && m.extra.payload_on) ? m.extra.payload_on : "";
+            document.getElementById("map_payload_off").value = (m.extra && m.extra.payload_off) ? m.extra.payload_off : "";
+            document.getElementById("map_value_map").value = (m.extra && m.extra.value_map) ? m.extra.value_map : "";
         }, 100);
         mappingModalObj.show();
     }
@@ -1670,6 +1704,9 @@
         const comp = document.getElementById("map_component_type").value;
         const name = document.getElementById("map_entity_name").value.trim();
         const unit = document.getElementById("map_unit").value.trim();
+        const payload_on = document.getElementById("map_payload_on").value.trim();
+        const payload_off = document.getElementById("map_payload_off").value.trim();
+        const value_map = document.getElementById("map_value_map").value.trim();
         if (!devId || !dps || !comp || !name) { alert("Wypełnij wymagane pola!"); return; }
         const mapId = editId ? editId : `${devId}_${dps}_${comp}`;
         const saveBtn = document.getElementById("btn-save-mapping");
@@ -1682,7 +1719,7 @@
             const res = await fetch(api("/api/mappings"), {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ id: mapId, device_id: devId, dps_key: dps, component: comp, entity_name: name, extra: { unit } })
+                body: JSON.stringify({ id: mapId, device_id: devId, dps_key: dps, component: comp, entity_name: name, extra: { unit, payload_on, payload_off, value_map } })
             });
             if (!res.ok) {
                 alert("Błąd zapisu mapowania (HTTP " + res.status + ")");

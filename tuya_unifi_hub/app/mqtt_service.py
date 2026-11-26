@@ -82,24 +82,44 @@ class MQTTService:
         if self.client and self.is_connected:
             self.client.publish("tuya_esp/status", "online", qos=1, retain=True)
 
-    def publish_mapped_value(self, device_id: str, dps_key: str, value: Any):
-        if not self.client or not self.is_connected:
-            return
-        
-        topic = f"tuya_esp/{device_id}/mapped/{dps_key}"
-        
-        # Konwersja booleana na 'ON'/'OFF' zgodnie z ESP32
-        if isinstance(value, bool):
-            payload = "ON" if value else "OFF"
-        elif str(value).lower() in ["true", "presence", "motion", "on", "1"]:
-            payload = "ON"
-        elif str(value).lower() in ["false", "none", "off", "0"]:
-            payload = "OFF"
-        else:
-            payload = str(value)
+    @staticmethod
+    def format_mapped_payload(value: Any, extra_options: Optional[dict] = None) -> str:
+        """Konwertuje surową wartość DPS na payload MQTT z uwzględnieniem własnych zamian użytkownika."""
+        extra = extra_options or {}
+        raw_str = str(value).strip()
+        raw_low = raw_str.lower()
 
+        # 1. Własna tabela zamian "klucz=wartość, klucz2=wartość2" (np. "presence=true, none=false")
+        value_map_str = (extra.get("value_map") or "").strip()
+        if value_map_str:
+            for pair in value_map_str.split(","):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    if k.strip().lower() == raw_low:
+                        return v.strip()
+
+        # 2. Nadpisanie stanów logicznych ON / OFF (np. payload_on="true", payload_off="false")
+        custom_on = (extra.get("payload_on") or "").strip()
+        custom_off = (extra.get("payload_off") or "").strip()
+
+        if isinstance(value, bool):
+            return (custom_on or "ON") if value else (custom_off or "OFF")
+        if raw_low in ["true", "presence", "present", "motion", "on", "1"]:
+            return custom_on or "ON"
+        if raw_low in ["false", "none", "off", "0"]:
+            return custom_off or "OFF"
+
+        return raw_str
+
+    def publish_mapped_value(self, device_id: str, dps_key: str, value: Any, extra_options: Optional[dict] = None) -> str:
+        payload = self.format_mapped_payload(value, extra_options)
+        if not self.client or not self.is_connected:
+            return payload
+
+        topic = f"tuya_esp/{device_id}/mapped/{dps_key}"
         self.client.publish(topic, payload, retain=True)
         logger.info(f"Wyslano MQTT [{topic}] -> {payload}")
+        return payload
 
     def publish_raw_state(self, device_id: str, dps: dict):
         if not self.client or not self.is_connected or not dps:

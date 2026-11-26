@@ -57,6 +57,9 @@ class MQTTDiscoveryBuilder:
             "device": device_info
         }
 
+        custom_on = (extra_options.get("payload_on") or "").strip() or "ON"
+        custom_off = (extra_options.get("payload_off") or "").strip() or "OFF"
+
         if component in ["sensor", "binary_sensor"]:
             unit = extra_options.get("unit", "")
             dev_class = extra_options.get("device_class", "")
@@ -64,21 +67,24 @@ class MQTTDiscoveryBuilder:
                 config["unit_of_measurement"] = unit
             if dev_class:
                 config["device_class"] = dev_class
+            if component == "binary_sensor":
+                config["payload_on"] = custom_on
+                config["payload_off"] = custom_off
 
         elif component == "switch":
             config.update({
                 "command_topic": cmd_topic,
-                "payload_on": "ON",
-                "payload_off": "OFF",
-                "state_on": "ON",
-                "state_off": "OFF"
+                "payload_on": custom_on,
+                "payload_off": custom_off,
+                "state_on": custom_on,
+                "state_off": custom_off
             })
 
         elif component == "light":
             config.update({
                 "command_topic": cmd_topic,
-                "payload_on": "ON",
-                "payload_off": "OFF"
+                "payload_on": custom_on,
+                "payload_off": custom_off
             })
 
         elif component == "climate":
