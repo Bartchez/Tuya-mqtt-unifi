@@ -28,7 +28,8 @@ class MQTTDiscoveryBuilder:
         
         base_topic = f"tuya_esp/{device_id}"
         lwt_topic = "tuya_esp/status"
-        dev_identifier = f"tuya_local_{device_id}"
+        # Wspólne 12-znakowe HEX ID dla całego urządzenia fizycznego (grupuje wszystkie opcje/encje w jednym bloczku MQTT)
+        device_hex_id = hashlib.md5(str(device_id).encode("utf-8")).hexdigest()[:12].upper()
 
         unique_id = f"tuya_{device_id}_map_{dps_key}"
         discovery_topic = f"homeassistant/{component}/{unique_id}/config"
@@ -42,7 +43,7 @@ class MQTTDiscoveryBuilder:
         proto_ver = extra_options.get("version", "3.3")
 
         device_info = {
-            "identifiers": [dev_identifier],
+            "identifiers": [device_hex_id],
             "name": dev_name,
             "manufacturer": "Tuya->Mqtt (ESP32-S3)",
             "model": f"Wi-Fi v{proto_ver}"
@@ -62,20 +63,21 @@ class MQTTDiscoveryBuilder:
         custom_off = (extra_options.get("payload_off") or "").strip() or "OFF"
 
         if component == "switch":
-            # F&Home (mqtt_switch_output) wymaga 12-znakowego HEX ID (jak MAC) oraz uniq_id "<HEX>_ch-1"
-            hex_id = hashlib.md5(f"{device_id}_{dps_key}".encode("utf-8")).hexdigest()[:12].upper()
-            sw_uid = f"{hex_id}_ch-1"
+            # F&Home (mqtt_switch_output): wspólne 12-znakowe HEX ID dla całego urządzenia + unikalny kanał _ch-<nr>
+            dps_str = str(dps_key).strip()
+            ch_num = dps_str if dps_str.isdigit() else str((int(hashlib.md5(dps_str.encode("utf-8")).hexdigest()[:4], 16) % 99) + 1)
+            sw_uid = f"{device_hex_id}_ch-{ch_num}"
             sw_disc_topic = f"homeassistant/switch/{sw_uid}/config"
             sw_cfg = {
                 "device": {
-                    "name": entity_display_name or dev_name,
+                    "name": dev_name,
                     "mdl": "r1s1_wp",
-                    "ids": hex_id,
+                    "ids": device_hex_id,
                     "mf": "F&F Filipowski Sp. k.",
                     "hw": "0.1",
                     "sw": "v1.18.23_dev"
                 },
-                "name": "",
+                "name": entity_display_name,
                 "uniq_id": sw_uid,
                 "ret": False,
                 "val_tpl": "{{value_json.RCH1|default('')}}",
@@ -109,10 +111,8 @@ class MQTTDiscoveryBuilder:
             })
 
         elif component == "climate":
-            # F&Home (thermo_w_lcd) wymaga 12-znakowego HEX ID, topicu homeassistant/climate/<HEX>/config
-            # oraz uniq_id "<HEX>_climate"
-            hex_id = hashlib.md5(f"{device_id}_{dps_key}_climate".encode("utf-8")).hexdigest()[:12].upper()
-            clim_disc_topic = f"homeassistant/climate/{hex_id}/config"
+            # F&Home (thermo_w_lcd): wspólne 12-znakowe HEX ID dla całego urządzenia fizycznego
+            clim_disc_topic = f"homeassistant/climate/{device_hex_id}/config"
             try:
                 min_t = float(extra_options.get("min_temp")) if str(extra_options.get("min_temp", "")).strip() != "" else 5.0
             except (ValueError, TypeError):
@@ -128,15 +128,15 @@ class MQTTDiscoveryBuilder:
 
             clim_cfg = {
                 "device": {
-                    "name": entity_display_name or dev_name,
+                    "name": dev_name,
                     "mdl": "thermo_w_lcd",
-                    "ids": hex_id,
+                    "ids": device_hex_id,
                     "mf": "F&F Filipowski Sp. k.",
                     "hw": "1.0",
                     "sw": "v1.19.0_dev"
                 },
-                "name": "THERMO",
-                "uniq_id": f"{hex_id}_climate",
+                "name": entity_display_name or "THERMO",
+                "uniq_id": f"{device_hex_id}_climate",
                 "avty_t": lwt_topic,
                 "curr_temp_t": state_topic,
                 "curr_temp_tpl": "{{value_json.in_temp}}",
