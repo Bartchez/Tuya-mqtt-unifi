@@ -65,14 +65,15 @@ class MQTTService:
         payload_raw = msg.payload.decode("utf-8", errors="ignore").strip()
         logger.info(f"Odebrano komende MQTT [{topic}]: {payload_raw}")
 
-        # Parsowanie tuya_esp/<dev_id>/set/<dps_key>
+        # Parsowanie tuya_esp/<dev_id>/set/<dps_key>[/<sub_cmd>]
         parts = topic.split("/")
         if len(parts) >= 4 and parts[0] == "tuya_esp" and parts[2] == "set":
             dev_id = parts[1]
             dps_key = parts[3]
+            sub_cmd = parts[4] if len(parts) >= 5 else None
             handler = self.command_handlers.get(dev_id)
             if handler:
-                handler(dev_id, dps_key, payload_raw)
+                handler(dev_id, dps_key, payload_raw, sub_cmd)
 
     def register_command_handler(self, dev_id: str, callback: Callable):
         with self._lock:
@@ -93,6 +94,22 @@ class MQTTService:
         if component == "switch":
             is_on = (value is True) or (raw_low in ["true", "presence", "present", "motion", "on", "1"])
             return json.dumps({"RCH1": "1" if is_on else "0"})
+
+        # Dla climate (format F&Home thermo_w_lcd): JSON {"in_temp":..., "target_temp":..., "work_mode":...}
+        if component == "climate":
+            if isinstance(value, dict) and ("target_temp" in value or "in_temp" in value):
+                return json.dumps(value, ensure_ascii=False)
+            try:
+                scale = float(extra.get("temp_scale") or 1)
+                if scale <= 0:
+                    scale = 1.0
+            except (ValueError, TypeError):
+                scale = 1.0
+            try:
+                t_val = round(float(value) / scale, 2)
+            except (ValueError, TypeError):
+                t_val = 20.0
+            return json.dumps({"in_temp": t_val, "target_temp": t_val, "work_mode": "heat"}, ensure_ascii=False)
 
         # 1. Własna tabela zamian "klucz=wartość, klucz2=wartość2" (np. "presence=true, none=false")
         value_map_str = (extra.get("value_map") or "").strip()
@@ -124,6 +141,14 @@ class MQTTService:
         topic = f"tuya_esp/{device_id}/mapped/{dps_key}"
         self.client.publish(topic, payload, retain=True)
         logger.info(f"Wyslano MQTT [{topic}] -> {payload}")
+        if component == "climate":
+            try:
+                st = json.loads(payload)
+                wm = str(st.get("work_mode", "off")).lower()
+                act = "off" if wm == "off" else ("cooling" if wm == "cool" else "heating")
+                self.client.publish(f"{topic}/action", json.dumps({"action": act}), retain=True)
+            except Exception:
+                pass
         return payload
 
     def publish_raw_state(self, device_id: str, dps: dict):

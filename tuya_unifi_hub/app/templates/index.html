@@ -560,12 +560,54 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Typ elementu MQTT</label>
-                        <select class="form-select" id="map_component_type" required>
+                        <select class="form-select" id="map_component_type" onchange="onMappingComponentChange()" required>
                             <option value="sensor">Sensor (czujnik, np. temperatura, stan)</option>
                             <option value="switch">Switch (przełącznik on/off)</option>
                             <option value="light">Light (oświetlenie)</option>
-                            <option value="climate">Climate (klimatyzacja / termostat)</option>
+                            <option value="climate">Climate (termostat / klimatyzacja F&amp;Home)</option>
                         </select>
+                    </div>
+                    <div id="climate-options-section" class="border rounded p-2 mb-3 bg-light" style="display:none;">
+                        <div class="small fw-bold text-success mb-2"><i class="bi bi-thermometer-half me-1"></i>Ustawienia termostatu Climate (F&amp;Home thermo_w_lcd)</div>
+                        <div class="small text-muted mb-2">Główny DPS powyżej = <strong>temperatura zadana (<code>target_temp</code>)</strong>. Pozostałe pola opcjonalne:</div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label class="form-label small mb-1">DPS aktualnej temp. (<code>in_temp</code>)</label>
+                                <select class="form-select form-select-sm" id="map_curr_temp_dps"></select>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label small mb-1">DPS zasilania ON/OFF (<code>power</code>)</label>
+                                <select class="form-select form-select-sm" id="map_power_dps"></select>
+                            </div>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label class="form-label small mb-1">DPS trybu pracy (<code>work_mode</code>)</label>
+                                <select class="form-select form-select-sm" id="map_mode_dps"></select>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label small mb-1">Skala temperatury (dzielnik)</label>
+                                <select class="form-select form-select-sm" id="map_temp_scale">
+                                    <option value="1">1 (np. 22 &rarr; 22°C)</option>
+                                    <option value="10">10 (np. 225 &rarr; 22.5°C)</option>
+                                    <option value="2">2 (np. 45 &rarr; 22.5°C)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-4">
+                                <label class="form-label small mb-1">Min (°C)</label>
+                                <input type="number" step="0.5" class="form-control form-control-sm" id="map_min_temp" value="5">
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label small mb-1">Max (°C)</label>
+                                <input type="number" step="0.5" class="form-control form-control-sm" id="map_max_temp" value="35">
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label small mb-1">Krok (°C)</label>
+                                <input type="number" step="0.1" class="form-control form-control-sm" id="map_temp_step" value="0.5">
+                            </div>
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Nazwa wyświetlana encji w HA</label>
@@ -1329,6 +1371,8 @@
                     } else {
                         document.getElementById("map_component_type").value = "sensor";
                     }
+                    resetClimateFields();
+                    onMappingComponentChange();
 
                     const mapEl = document.getElementById("mappingModal");
                     const mapModal = bootstrap.Modal.getOrCreateInstance(mapEl);
@@ -1629,6 +1673,23 @@
         }
     }
 
+    function onMappingComponentChange() {
+        const comp = document.getElementById("map_component_type").value;
+        const sec = document.getElementById("climate-options-section");
+        if (sec) sec.style.display = (comp === "climate") ? "block" : "none";
+    }
+
+    function resetClimateFields() {
+        ["map_curr_temp_dps", "map_power_dps", "map_mode_dps"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = "";
+        });
+        document.getElementById("map_temp_scale").value = "1";
+        document.getElementById("map_min_temp").value = "5";
+        document.getElementById("map_max_temp").value = "35";
+        document.getElementById("map_temp_step").value = "0.5";
+    }
+
     function openAddMappingModal() {
         document.getElementById("mappingModalTitle").textContent = "Nowe mapowanie MQTT";
         document.getElementById("edit_map_id").value = "";
@@ -1639,11 +1700,14 @@
         }
         sel.disabled = false;
         document.getElementById("map_dps_select").innerHTML = '<option value="">Najpierw wybierz urządzenie</option>';
+        document.getElementById("map_component_type").value = "sensor";
         document.getElementById("map_entity_name").value = "";
         document.getElementById("map_unit").value = "";
         document.getElementById("map_payload_on").value = "";
         document.getElementById("map_payload_off").value = "";
         document.getElementById("map_value_map").value = "";
+        resetClimateFields();
+        onMappingComponentChange();
         mappingModalObj.show();
     }
 
@@ -1664,10 +1728,19 @@
             document.getElementById("map_dps_select").value = m.dps_key;
             document.getElementById("map_component_type").value = m.component || "sensor";
             document.getElementById("map_entity_name").value = m.entity_name || "";
-            document.getElementById("map_unit").value = (m.extra && m.extra.unit) ? m.extra.unit : "";
-            document.getElementById("map_payload_on").value = (m.extra && m.extra.payload_on) ? m.extra.payload_on : "";
-            document.getElementById("map_payload_off").value = (m.extra && m.extra.payload_off) ? m.extra.payload_off : "";
-            document.getElementById("map_value_map").value = (m.extra && m.extra.value_map) ? m.extra.value_map : "";
+            const ex = m.extra || {};
+            document.getElementById("map_unit").value = ex.unit || "";
+            document.getElementById("map_payload_on").value = ex.payload_on || "";
+            document.getElementById("map_payload_off").value = ex.payload_off || "";
+            document.getElementById("map_value_map").value = ex.value_map || "";
+            document.getElementById("map_curr_temp_dps").value = ex.curr_temp_dps || "";
+            document.getElementById("map_power_dps").value = ex.power_dps || "";
+            document.getElementById("map_mode_dps").value = ex.mode_dps || "";
+            document.getElementById("map_temp_scale").value = String(ex.temp_scale || "1");
+            document.getElementById("map_min_temp").value = (ex.min_temp !== undefined && ex.min_temp !== "") ? ex.min_temp : "5";
+            document.getElementById("map_max_temp").value = (ex.max_temp !== undefined && ex.max_temp !== "") ? ex.max_temp : "35";
+            document.getElementById("map_temp_step").value = (ex.temp_step !== undefined && ex.temp_step !== "") ? ex.temp_step : "0.5";
+            onMappingComponentChange();
         }, 100);
         mappingModalObj.show();
     }
@@ -1676,25 +1749,45 @@
         const devId = document.getElementById("map_device_select").value;
         const dev = devicesCache[devId];
         const dpsSel = document.getElementById("map_dps_select");
+        const auxIds = ["map_curr_temp_dps", "map_power_dps", "map_mode_dps"];
         dpsSel.innerHTML = "";
-        const addOpt = (val, label) => {
+        auxIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = '<option value="">(Brak)</option>';
+        });
+        const addOpt = (selEl, val, label) => {
             const o = document.createElement("option");
             o.value = String(val);
             o.textContent = label;
-            dpsSel.appendChild(o);
+            selEl.appendChild(o);
         };
         if (dev && dev.dps && Object.keys(dev.dps).length > 0) {
             for (const [k, v] of Object.entries(dev.dps)) {
                 const valStr = typeof v === "object" ? JSON.stringify(v) : String(v);
                 const shortVal = valStr.length > 40 ? valStr.substring(0, 40) + "..." : valStr;
-                addOpt(k, `DPS ${k} (Wartość: ${shortVal})`);
+                const label = `DPS ${k} (${shortVal})`;
+                addOpt(dpsSel, k, `DPS ${k} (Wartość: ${shortVal})`);
+                auxIds.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) addOpt(el, k, label);
+                });
             }
         } else {
-            addOpt("1", "DPS 1 (Zwykle On/Off)");
-            addOpt("2", "DPS 2 (Tryb / Jasność)");
-            addOpt("presence_state", "presence_state (Obecność)");
+            addOpt(dpsSel, "1", "DPS 1 (Zwykle On/Off)");
+            addOpt(dpsSel, "2", "DPS 2 (Tryb / Temp. zadana)");
+            addOpt(dpsSel, "3", "DPS 3 (Temp. aktualna)");
+            addOpt(dpsSel, "presence_state", "presence_state (Obecność)");
+            auxIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    addOpt(el, "1", "DPS 1");
+                    addOpt(el, "2", "DPS 2");
+                    addOpt(el, "3", "DPS 3");
+                    addOpt(el, "4", "DPS 4");
+                }
+            });
         }
-        addOpt("custom", "Inny DPS (ręczny)");
+        addOpt(dpsSel, "custom", "Inny DPS (ręczny)");
     }
 
     async function saveNewMapping() {
@@ -1707,6 +1800,16 @@
         const payload_on = document.getElementById("map_payload_on").value.trim();
         const payload_off = document.getElementById("map_payload_off").value.trim();
         const value_map = document.getElementById("map_value_map").value.trim();
+        const extra = { unit, payload_on, payload_off, value_map };
+        if (comp === "climate") {
+            extra.curr_temp_dps = document.getElementById("map_curr_temp_dps").value.trim();
+            extra.power_dps = document.getElementById("map_power_dps").value.trim();
+            extra.mode_dps = document.getElementById("map_mode_dps").value.trim();
+            extra.temp_scale = document.getElementById("map_temp_scale").value;
+            extra.min_temp = document.getElementById("map_min_temp").value;
+            extra.max_temp = document.getElementById("map_max_temp").value;
+            extra.temp_step = document.getElementById("map_temp_step").value;
+        }
         if (!devId || !dps || !comp || !name) { alert("Wypełnij wymagane pola!"); return; }
         const mapId = editId ? editId : `${devId}_${dps}_${comp}`;
         const saveBtn = document.getElementById("btn-save-mapping");
@@ -1719,7 +1822,7 @@
             const res = await fetch(api("/api/mappings"), {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ id: mapId, device_id: devId, dps_key: dps, component: comp, entity_name: name, extra: { unit, payload_on, payload_off, value_map } })
+                body: JSON.stringify({ id: mapId, device_id: devId, dps_key: dps, component: comp, entity_name: name, extra })
             });
             if (!res.ok) {
                 alert("Błąd zapisu mapowania (HTTP " + res.status + ")");

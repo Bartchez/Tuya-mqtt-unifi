@@ -50,6 +50,58 @@ mqtt_service = MQTTService(
     password=settings.get("mqtt_password", "ffdevice")
 )
 
+def _build_climate_state(dps: dict, dps_key: str, extra: dict):
+    """Buduje JSON stanu termostatu w formacie F&Home thermo_w_lcd z DPS urządzenia Tuya."""
+    extra = extra or {}
+    try:
+        scale = float(extra.get("temp_scale") or 1)
+        if scale <= 0:
+            scale = 1.0
+    except (ValueError, TypeError):
+        scale = 1.0
+
+    raw_target = TuyaLocalManager.resolve_dps_value(dps, dps_key)
+    curr_dps = str(extra.get("curr_temp_dps") or "").strip()
+    raw_curr = TuyaLocalManager.resolve_dps_value(dps, curr_dps) if curr_dps else None
+
+    if raw_target is None and raw_curr is None:
+        return None
+
+    def _to_temp(v, fallback=20.0):
+        try:
+            return round(float(v) / scale, 2)
+        except (ValueError, TypeError):
+            return fallback
+
+    target_temp = _to_temp(raw_target, _to_temp(raw_curr, 20.0)) if raw_target is not None else _to_temp(raw_curr, 20.0)
+    in_temp = _to_temp(raw_curr, target_temp) if raw_curr is not None else target_temp
+
+    work_mode = "heat"
+    power_dps = str(extra.get("power_dps") or "").strip()
+    mode_dps = str(extra.get("mode_dps") or "").strip()
+
+    if power_dps:
+        p_val = TuyaLocalManager.resolve_dps_value(dps, power_dps)
+        if p_val is False or str(p_val).strip().lower() in ["false", "0", "off"]:
+            work_mode = "off"
+
+    if work_mode != "off" and mode_dps:
+        m_val = TuyaLocalManager.resolve_dps_value(dps, mode_dps)
+        if m_val is not None:
+            m_low = str(m_val).strip().lower()
+            if m_low in ["off", "standby", "false", "0"]:
+                work_mode = "off"
+            elif m_low in ["cool", "cold", "cooling"]:
+                work_mode = "cool"
+            else:
+                work_mode = "heat"
+
+    return {
+        "in_temp": in_temp,
+        "target_temp": target_temp,
+        "work_mode": work_mode
+    }
+
 def on_local_status_update(device_id: str, dps: dict):
     if device_id in devices:
         existing_dps = devices[device_id].get("dps")
@@ -63,12 +115,18 @@ def on_local_status_update(device_id: str, dps: dict):
     mqtt_service.publish_status_online()
     mqtt_service.publish_raw_state(device_id, dps)
 
+    full_dps = devices.get(device_id, {}).get("dps") or dps
     for m in mappings.values():
         if m.get("device_id") == device_id:
             dps_k = str(m.get("dps_key"))
-            val = TuyaLocalManager.resolve_dps_value(dps, dps_k)
+            comp = m.get("component", "sensor")
+            extra = m.get("extra", {}) or {}
+            if comp == "climate":
+                val = _build_climate_state(full_dps, dps_k, extra)
+            else:
+                val = TuyaLocalManager.resolve_dps_value(dps, dps_k)
             if val is not None:
-                mqtt_service.publish_mapped_value(device_id, dps_k, val, m.get("extra", {}), component=m.get("component", "sensor"))
+                mqtt_service.publish_mapped_value(device_id, dps_k, val, extra, component=comp)
 
 def on_version_detected(device_id: str, version_str: str):
     if device_id in devices and str(devices[device_id].get("version", "")) != str(version_str):
@@ -81,15 +139,59 @@ tuya_local = TuyaLocalManager(
     on_version_detected=on_version_detected
 )
 
-def on_mqtt_command(device_id: str, dps_key: str, payload_str: str):
-    logger.info(f"Odebrano rozkaz MQTT dla {device_id} (DPS: {dps_key}): {payload_str}")
-    val = payload_str
-    # Sprawdź własne payload_on / payload_off z mapowania
-    matched_extra = {}
+def on_mqtt_command(device_id: str, dps_key: str, payload_str: str, sub_cmd: str = None):
+    logger.info(f"Odebrano rozkaz MQTT dla {device_id} (DPS: {dps_key}, sub: {sub_cmd}): {payload_str}")
+    matched_mapping = None
     for m in mappings.values():
         if m.get("device_id") == device_id and str(m.get("dps_key")) == str(dps_key):
-            matched_extra = m.get("extra", {}) or {}
+            matched_mapping = m
             break
+    matched_extra = (matched_mapping.get("extra", {}) or {}) if matched_mapping else {}
+    comp = (matched_mapping.get("component") or "sensor") if matched_mapping else "sensor"
+
+    # Obsługa pod-komend dla climate (/temp, /mode, /power)
+    if comp == "climate" or sub_cmd in ("temp", "mode", "power"):
+        dps_cmd = {}
+        if sub_cmd == "temp":
+            try:
+                scale = float(matched_extra.get("temp_scale") or 1)
+                if scale <= 0:
+                    scale = 1.0
+                t_val = float(payload_str.strip())
+                scaled = t_val * scale
+                dps_cmd[str(dps_key)] = int(round(scaled)) if abs(scaled - round(scaled)) < 1e-6 else round(scaled, 1)
+            except (ValueError, TypeError):
+                logger.warning(f"Nieprawidlowa temperatura w komendzie MQTT: {payload_str}")
+                return
+        elif sub_cmd == "mode":
+            m_low = payload_str.strip().lower()
+            power_dps = str(matched_extra.get("power_dps") or "").strip()
+            mode_dps = str(matched_extra.get("mode_dps") or "").strip()
+            if m_low == "off":
+                if power_dps:
+                    dps_cmd[power_dps] = False
+                elif mode_dps:
+                    dps_cmd[mode_dps] = "off"
+            else:
+                if power_dps:
+                    dps_cmd[power_dps] = True
+                if mode_dps:
+                    dps_cmd[mode_dps] = m_low
+        elif sub_cmd == "power":
+            p_up = payload_str.strip().upper()
+            is_on = p_up in ["ON", "TRUE", "1"]
+            power_dps = str(matched_extra.get("power_dps") or "").strip()
+            dps_cmd[power_dps or str(dps_key)] = is_on
+
+        if dps_cmd:
+            threading.Thread(
+                target=tuya_local.send_dps_command,
+                args=(device_id, dps_cmd),
+                daemon=True
+            ).start()
+        return
+
+    val = payload_str
     custom_on = (matched_extra.get("payload_on") or "").strip().upper()
     custom_off = (matched_extra.get("payload_off") or "").strip().upper()
     p_up = payload_str.strip().upper()
@@ -131,9 +233,10 @@ def publish_all_mappings():
 
             dps_cache = dev.get("dps", {})
             dps_k = str(m.get("dps_key"))
-            val = TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
+            comp = m.get("component", "sensor")
+            val = _build_climate_state(dps_cache, dps_k, extra) if comp == "climate" else TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
             if val is not None:
-                mqtt_service.publish_mapped_value(m["device_id"], dps_k, val, m.get("extra", {}), component=m.get("component", "sensor"))
+                mqtt_service.publish_mapped_value(m["device_id"], dps_k, val, m.get("extra", {}), component=comp)
         except Exception as e:
             logger.error(f"Blad republowania mapowania {m}: {e}")
     
@@ -281,9 +384,10 @@ async def create_mapping(req: Request):
     # Natychmiast wyślij ostatnią znaną wartość z cache (nie blokuj odpowiedzi HTTP)
     dps_cache = dev.get("dps", {}) or {}
     dps_k = str(body["dps_key"])
-    val = TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
+    comp = body.get("component", "sensor")
+    val = _build_climate_state(dps_cache, dps_k, extra) if comp == "climate" else TuyaLocalManager.resolve_dps_value(dps_cache, dps_k)
     if val is not None:
-        mqtt_service.publish_mapped_value(dev_id, dps_k, val, extra, component=body.get("component", "sensor"))
+        mqtt_service.publish_mapped_value(dev_id, dps_k, val, extra, component=comp)
 
     # W tle odpytaj urządzenie przez LAN, aby zaktualizować świeżą wartością
     def _bg_poll(target_dev_id: str):
@@ -340,18 +444,17 @@ async def test_mapping(map_id: str):
         source = "Cache (brak odpowiedzi LAN)"
 
     resolved_id = TuyaLocalManager.resolve_dps_id(dps_k, active_dps)
-    raw_val = TuyaLocalManager.resolve_dps_value(active_dps, dps_k)
-    value_found = raw_val is not None
-
-    # 2. Republuj Discovery z aktualną nazwą z mapowania i wyślij wartość do MQTT
+    comp = m.get("component", "sensor")
     extra = dict(m.get("extra", {}) or {})
     extra["version"] = dev.get("version", "3.3")
+    raw_val = _build_climate_state(active_dps, dps_k, extra) if comp == "climate" else TuyaLocalManager.resolve_dps_value(active_dps, dps_k)
+    value_found = raw_val is not None
 
     # Wyznacz dokładny payload wysyłany do MQTT (z uwzględnieniem własnych zamian)
-    mqtt_payload = MQTTService.format_mapped_payload(raw_val, extra, component=m.get("component", "sensor")) if value_found else None
+    mqtt_payload = MQTTService.format_mapped_payload(raw_val, extra, component=comp) if value_found else None
 
     discovery_topic, cfg = MQTTDiscoveryBuilder.build_config(
-        component=m["component"],
+        component=comp,
         device_id=dev_id,
         device_name=dev.get("name", dev_id),
         dps_key=dps_k,
@@ -364,7 +467,7 @@ async def test_mapping(map_id: str):
         mqtt_service.publish_discovery(discovery_topic, cfg)
         mqtt_service.register_command_handler(dev_id, on_mqtt_command)
         if value_found:
-            mqtt_service.publish_mapped_value(dev_id, dps_k, raw_val, extra, component=m.get("component", "sensor"))
+            mqtt_service.publish_mapped_value(dev_id, dps_k, raw_val, extra, component=comp)
 
     return {
         "success": lan_ok and mqtt_connected and value_found,
@@ -380,7 +483,7 @@ async def test_mapping(map_id: str):
         "resolved_dps_id": resolved_id,
         "raw_value": raw_val,
         "mqtt_payload": mqtt_payload,
-        "state_topic": cfg.get("state_topic") or cfg.get("stat_t"),
+        "state_topic": cfg.get("state_topic") or cfg.get("stat_t") or cfg.get("temp_stat_t"),
         "discovery_topic": discovery_topic,
         "broker_device_name": cfg.get("device", {}).get("name"),
         "broker_entity_name": cfg.get("name") or entity_name,
@@ -414,24 +517,26 @@ async def force_publish_mapping(map_id: str, req: Request):
     source = "Wartość ręczna"
     val_to_send = custom_val
 
+    comp = m.get("component", "sensor")
+    extra = dict(m.get("extra", {}) or {})
+    extra["version"] = dev.get("version", "3.3")
+
     if val_to_send is None:
         fresh_dps = await asyncio.to_thread(tuya_local.poll_device_status, dev_id)
         if fresh_dps and isinstance(fresh_dps, dict):
             on_local_status_update(dev_id, fresh_dps)
-            val_to_send = TuyaLocalManager.resolve_dps_value(fresh_dps, dps_k)
+            val_to_send = _build_climate_state(fresh_dps, dps_k, extra) if comp == "climate" else TuyaLocalManager.resolve_dps_value(fresh_dps, dps_k)
             source = "LAN (na żywo)"
         if val_to_send is None:
             cached_dps = dev.get("dps", {}) or {}
-            val_to_send = TuyaLocalManager.resolve_dps_value(cached_dps, dps_k)
+            val_to_send = _build_climate_state(cached_dps, dps_k, extra) if comp == "climate" else TuyaLocalManager.resolve_dps_value(cached_dps, dps_k)
             source = "Cache"
         if val_to_send is None:
-            val_to_send = "OFF"
-            source = "Domyślna (OFF)"
+            val_to_send = {"in_temp": 20.0, "target_temp": 20.0, "work_mode": "heat"} if comp == "climate" else "OFF"
+            source = "Domyślna"
 
-    extra = dict(m.get("extra", {}) or {})
-    extra["version"] = dev.get("version", "3.3")
     discovery_topic, cfg = MQTTDiscoveryBuilder.build_config(
-        component=m["component"],
+        component=comp,
         device_id=dev_id,
         device_name=dev.get("name", dev_id),
         dps_key=dps_k,
@@ -442,11 +547,11 @@ async def force_publish_mapping(map_id: str, req: Request):
     mqtt_service.publish_status_online()
     mqtt_service.publish_discovery(discovery_topic, cfg)
     mqtt_service.register_command_handler(dev_id, on_mqtt_command)
-    sent_payload = mqtt_service.publish_mapped_value(dev_id, dps_k, val_to_send, extra, component=m.get("component", "sensor"))
+    sent_payload = mqtt_service.publish_mapped_value(dev_id, dps_k, val_to_send, extra, component=comp)
 
     return {
         "success": True,
-        "topic": cfg.get("state_topic") or cfg.get("stat_t"),
+        "topic": cfg.get("state_topic") or cfg.get("stat_t") or cfg.get("temp_stat_t"),
         "payload": sent_payload,
         "source": source
     }

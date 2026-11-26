@@ -109,12 +109,53 @@ class MQTTDiscoveryBuilder:
             })
 
         elif component == "climate":
-            config.update({
-                "temperature_command_topic": f"{cmd_topic}/temp",
-                "temperature_state_topic": state_topic,
-                "temp_step": 0.5,
-                "min_temp": 16,
-                "max_temp": 30
-            })
+            # F&Home (thermo_w_lcd) wymaga 12-znakowego HEX ID, topicu homeassistant/climate/<HEX>/config
+            # oraz uniq_id "<HEX>_climate"
+            hex_id = hashlib.md5(f"{device_id}_{dps_key}_climate".encode("utf-8")).hexdigest()[:12].upper()
+            clim_disc_topic = f"homeassistant/climate/{hex_id}/config"
+            try:
+                min_t = float(extra_options.get("min_temp")) if str(extra_options.get("min_temp", "")).strip() != "" else 5.0
+            except (ValueError, TypeError):
+                min_t = 5.0
+            try:
+                max_t = float(extra_options.get("max_temp")) if str(extra_options.get("max_temp", "")).strip() != "" else 35.0
+            except (ValueError, TypeError):
+                max_t = 35.0
+            try:
+                step_t = float(extra_options.get("temp_step")) if str(extra_options.get("temp_step", "")).strip() != "" else 0.5
+            except (ValueError, TypeError):
+                step_t = 0.5
+
+            clim_cfg = {
+                "device": {
+                    "name": entity_display_name or dev_name,
+                    "mdl": "thermo_w_lcd",
+                    "ids": hex_id,
+                    "mf": "F&F Filipowski Sp. k.",
+                    "hw": "1.0",
+                    "sw": "v1.19.0_dev"
+                },
+                "name": "THERMO",
+                "uniq_id": f"{hex_id}_climate",
+                "avty_t": lwt_topic,
+                "curr_temp_t": state_topic,
+                "curr_temp_tpl": "{{value_json.in_temp}}",
+                "temp_cmd_t": f"{cmd_topic}/temp",
+                "temp_stat_t": state_topic,
+                "temp_stat_tpl": "{{value_json.target_temp}}",
+                "max_temp": max_t,
+                "min_temp": min_t,
+                "temp_step": step_t,
+                "temp_unit": "C",
+                "mode_stat_t": state_topic,
+                "mode_cmd_t": f"{cmd_topic}/mode",
+                "mode_stat_tpl": "{{value_json.work_mode}}",
+                "opt": False,
+                "power_command_topic": f"{cmd_topic}/power",
+                "act_t": f"{state_topic}/action",
+                "act_tpl": "{{value_json.action}}",
+                "modes": ["off", "heat", "cool"]
+            }
+            return clim_disc_topic, clim_cfg
 
         return discovery_topic, config
