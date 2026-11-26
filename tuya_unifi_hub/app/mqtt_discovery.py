@@ -1,4 +1,5 @@
 ﻿import json
+import hashlib
 import logging
 from typing import Dict, Any
 
@@ -61,16 +62,18 @@ class MQTTDiscoveryBuilder:
         custom_off = (extra_options.get("payload_off") or "").strip() or "OFF"
 
         if component == "switch":
-            sw_uid = f"tuya_{device_id}_map_{dps_key}_ch-1"
+            # F&Home (mqtt_switch_output) wymaga 12-znakowego HEX ID (jak MAC) oraz uniq_id "<HEX>_ch-1"
+            hex_id = hashlib.md5(f"{device_id}_{dps_key}".encode("utf-8")).hexdigest()[:12].upper()
+            sw_uid = f"{hex_id}_ch-1"
             sw_disc_topic = f"homeassistant/switch/{sw_uid}/config"
             sw_cfg = {
                 "device": {
                     "name": entity_display_name or dev_name,
                     "mdl": "r1s1_wp",
-                    "ids": f"tuya_{device_id}_{dps_key}",
+                    "ids": hex_id,
                     "mf": "F&F Filipowski Sp. k.",
                     "hw": "0.1",
-                    "sw": f"v{proto_ver}"
+                    "sw": "v1.18.23_dev"
                 },
                 "name": "",
                 "uniq_id": sw_uid,
