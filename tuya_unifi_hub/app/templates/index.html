@@ -87,12 +87,19 @@
                     </div>
                 </div>
                 <div class="card-body">
-                    <div class="alert alert-light border d-flex justify-content-between align-items-center py-2 mb-3 small">
+                    <div class="alert alert-light border d-flex justify-content-between align-items-center flex-wrap gap-2 py-2 mb-3 small">
                         <div>
                             <i class="bi bi-info-circle text-primary me-1"></i>
-                            W tej tabeli możesz <strong>wymusić lokalny adres IP</strong>, <strong>zmienić powiązanie z routerem UniFi</strong>, <strong>zapisać stałą rezerwację DHCP (Fixed IP)</strong> oraz przetestować komunikację LAN (port 6668).
+                            W tej tabeli możesz <strong>wymusić lokalny adres IP</strong>, <strong>powiązać z UniFi</strong>, <strong>zapisać stałe IP (DHCP)</strong>, <strong>przetestować LAN</strong> oraz od razu <strong>zmapować do MQTT</strong>.
                         </div>
-                        <div id="match-stats" class="text-muted fw-bold"></div>
+                        <div class="d-flex align-items-center gap-3 flex-wrap">
+                            <div class="input-group input-group-sm" style="width: 280px;">
+                                <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
+                                <input type="text" class="form-control" id="match-search-input" placeholder="Szukaj po nazwie, IP, MAC..." oninput="renderMatchesTable()">
+                                <button class="btn btn-outline-secondary" type="button" title="Wyczyść" onclick="document.getElementById('match-search-input').value=''; renderMatchesTable();"><i class="bi bi-x"></i></button>
+                            </div>
+                            <div id="match-stats" class="text-muted fw-bold text-nowrap"></div>
+                        </div>
                     </div>
 
                     <div class="table-responsive">
@@ -767,14 +774,38 @@
             });
         }
 
-        for (const item of sortedMatches) {
+        const searchEl = document.getElementById("match-search-input");
+        const query = searchEl ? searchEl.value.toLowerCase().trim() : "";
+
+        const totalMatchedCount = matchesCache.filter(x => Boolean(x.local_ip && x.local_ip !== "-")).length;
+
+        const filteredMatches = query
+            ? sortedMatches.filter(item =>
+                (item.name || "").toLowerCase().includes(query) ||
+                (item.device_id || "").toLowerCase().includes(query) ||
+                (item.local_ip || "").toLowerCase().includes(query) ||
+                (item.mac || "").toLowerCase().includes(query) ||
+                (item.category || "").toLowerCase().includes(query) ||
+                (item.status || "").toLowerCase().includes(query)
+            )
+            : sortedMatches;
+
+        if (filteredMatches.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">
+                Brak urządzeń pasujących do frazy „<strong>${query.replace(/</g, '&lt;')}</strong>”.
+            </td></tr>`;
+            document.getElementById("match-stats").textContent = `Widoczne: 0 / ${matchesCache.length} | Połączono: ${totalMatchedCount}`;
+            return;
+        }
+
+        for (const item of filteredMatches) {
             const isMatched = Boolean(item.local_ip && item.local_ip !== "-");
             if (isMatched) matchedCount++;
 
             const devMapList = mapsByDev[item.device_id] || [];
             const mappedHtml = devMapList.length > 0
-                ? `<span class="badge bg-success" title="${devMapList.join(', ').replace(/"/g, '&quot;')}"><i class="bi bi-diagram-3-fill me-1"></i>TAK (${devMapList.length})</span>`
-                : `<span class="badge bg-light text-muted border">NIE</span>`;
+                ? `<span class="badge bg-success" style="cursor:pointer;" onclick="openDpsPreview('${item.device_id}')" title="${devMapList.join(', ').replace(/"/g, '&quot;')} (kliknij, aby dodać/zobaczyć mapowania)"><i class="bi bi-diagram-3-fill me-1"></i>TAK (${devMapList.length})</span>`
+                : `<span class="badge bg-light text-muted border" style="cursor:pointer;" onclick="openDpsPreview('${item.device_id}')" title="Kliknij, aby zmapować do MQTT">NIE</span>`;
 
             let statusBadge = "bg-secondary";
             const stLow = (item.status || "").toLowerCase();
@@ -805,6 +836,9 @@
                 <td>${mappedHtml}</td>
                 <td class="text-end">
                     <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-success" title="Podgląd DPS i szybkie mapowanie do MQTT" onclick="openDpsPreview('${item.device_id}')">
+                            <i class="bi bi-diagram-3"></i> Mapuj
+                        </button>
                         <button class="btn btn-outline-primary" title="Wybierz powiązanie z listy UniFi" onclick="openBindModal('${item.device_id}')">
                             <i class="bi bi-link-45deg"></i> Powiąż
                         </button>
@@ -826,7 +860,9 @@
             tbody.appendChild(tr);
         }
 
-        document.getElementById("match-stats").textContent = `Połączono: ${matchedCount} / ${matchesCache.length} urządzeń`;
+        document.getElementById("match-stats").textContent = query
+            ? `Widoczne: ${filteredMatches.length} / ${matchesCache.length} | Połączono: ${totalMatchedCount}`
+            : `Połączono: ${totalMatchedCount} / ${matchesCache.length} urządzeń`;
     }
 
     // ===== POBIERANIE KLIENTÓW Z UNIFI / LAN =====
