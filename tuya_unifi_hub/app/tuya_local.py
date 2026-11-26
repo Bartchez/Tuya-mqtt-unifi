@@ -170,8 +170,20 @@ class TuyaLocalManager:
     def stop(self):
         self.running = False
 
+    def _get_gateway_conn_params(self, dev_info: dict):
+        """Zwraca (gw_id, gw_ip, gw_key, gw_ver) dla urządzenia podbramkowego Zigbee/BLE."""
+        gw_id = (dev_info.get("gateway_id") or "").strip()
+        gw_info = self.devices.get(gw_id, {}) if gw_id else {}
+        gw_ip = (gw_info.get("ip") or dev_info.get("ip") or "").strip()
+        gw_key = (gw_info.get("local_key") or dev_info.get("local_key") or "").strip()
+        try:
+            gw_ver = float(gw_info.get("version") or dev_info.get("version") or 3.3)
+        except (ValueError, TypeError):
+            gw_ver = 3.3
+        return gw_id, gw_ip, gw_key, gw_ver
+
     def send_dps_command(self, device_id: str, dps_updates: dict) -> bool:
-        """Wysyła polecenie zmiany parametrów (DPS) bezpośrednio do urządzenia przez LAN (obsługuje 3.1, 3.3, 3.4, 3.5 oraz sub-devices)."""
+        """Wysyła polecenie zmiany parametrów (DPS) bezpośrednio do urządzenia przez LAN (obsługuje 3.1, 3.3, 3.4, 3.5 oraz sub-devices Zigbee)."""
         dev_info = self.devices.get(device_id, {})
         available_dps = dev_info.get("dps", {})
         translated_updates = {}
@@ -179,30 +191,63 @@ class TuyaLocalManager:
             resolved_id = self.resolve_dps_id(k, available_dps)
             translated_updates[resolved_id] = v
 
-        node_id = dev_info.get("node_id")
-        ip = dev_info.get("ip")
-        local_key = dev_info.get("local_key")
+        node_id = (dev_info.get("node_id") or "").strip()
+        ip = (dev_info.get("ip") or "").strip()
+        local_key = (dev_info.get("local_key") or "").strip()
 
-        # 1. Urządzenia podbramkowe (Zigbee / BLE)
+        # 1. Urządzenia podbramkowe (Zigbee / BLE) z auto-detekcją wersji protokołu bramki
         if node_id:
-            client = self.device_clients.get(device_id)
-            if not client:
-                logger.error(f"Brak klienta podbramkowego dla {device_id}")
+            gw_id, gw_ip, gw_key, gw_ver = self._get_gateway_conn_params(dev_info)
+            if not gw_id or not gw_ip or not gw_key:
+                logger.error(f"Brak danych bramki dla sub-device {device_id} (gw_id={gw_id}, gw_ip={gw_ip})")
                 return False
-            try:
-                logger.info(f"Wysylanie komendy podbramkowej do {device_id}: {translated_updates}")
-                client.set_socketTimeout(2.0)
-                client.set_socketRetryLimit(1)
-                res = client.set_multiple_values(translated_updates)
-                logger.info(f"Odpowiedz podbramkowa {device_id}: {res}")
-                time.sleep(0.15)
-                status = client.status()
-                if status and isinstance(status, dict) and "dps" in status:
-                    self.on_status_update(device_id, status["dps"])
-                return True
-            except Exception as e:
-                logger.error(f"Blad wysylania komendy podbramkowej do {device_id}: {e}")
+            if not self._is_port_open(gw_ip, 6668, timeout=1.0):
+                logger.error(f"Bramka Zigbee {gw_id} ({gw_ip}:6668) nie odpowiada")
                 return False
+
+            versions_to_try = [gw_ver, 3.4, 3.3, 3.5, 3.1]
+            seen = set()
+            versions_to_try = [v for v in versions_to_try if not (v in seen or seen.add(v))]
+
+            for v in versions_to_try:
+                gw = None
+                try:
+                    logger.info(f"Wysylanie komendy Zigbee do {device_id} (CID={node_id}, bramka={gw_ip}, v{v}): {translated_updates}")
+                    gw = tinytuya.Device(gw_id, gw_ip, gw_key, version=float(v))
+                    gw.set_socketTimeout(2.0)
+                    gw.set_socketRetryLimit(1)
+                    gw.set_socketPersistent(True)
+                    sub = tinytuya.Device(device_id, cid=node_id, parent=gw)
+                    res = sub.set_multiple_values(translated_updates)
+                    logger.info(f"Odpowiedz Zigbee {device_id} (v{v}): {res}")
+                    if isinstance(res, dict) and "Error" in res:
+                        continue
+                    if abs(v - gw_ver) >= 0.01:
+                        if gw_id in self.devices:
+                            self.devices[gw_id]["version"] = str(v)
+                        dev_info["version"] = str(v)
+                        if self.on_version_detected:
+                            self.on_version_detected(gw_id, str(v))
+                            self.on_version_detected(device_id, str(v))
+                    if isinstance(res, dict) and "dps" in res and res["dps"]:
+                        self.on_status_update(device_id, res["dps"])
+                    else:
+                        time.sleep(0.15)
+                        status = sub.status()
+                        if isinstance(status, dict) and "dps" in status and status["dps"]:
+                            self.on_status_update(device_id, status["dps"])
+                        else:
+                            self.on_status_update(device_id, translated_updates)
+                    return True
+                except Exception as e:
+                    logger.warning(f"Blad wysylania komendy Zigbee (v{v}) do {device_id}: {e}")
+                finally:
+                    if gw:
+                        try:
+                            gw.close()
+                        except Exception:
+                            pass
+            return False
 
         # 2. Standardowe urządzenia Wi-Fi (z auto-detekcją wersji 3.4 / 3.3 / 3.5 / 3.1)
         if not ip or not local_key:
@@ -271,19 +316,45 @@ class TuyaLocalManager:
         local_key = info.get("local_key")
         node_id = info.get("node_id")
 
-        # Urządzenia podbramkowe (Zigbee/BLE) używają klienta z parent gateway
+        # Urządzenia podbramkowe (Zigbee/BLE) przez bramkę z auto-detekcją wersji protokołu
         if node_id:
-            client = self.device_clients.get(device_id)
-            if not client:
+            gw_id, gw_ip, gw_key, gw_ver = self._get_gateway_conn_params(info)
+            if not gw_id or not gw_ip or not gw_key:
                 return {}
-            try:
-                client.set_socketTimeout(1.5)
-                client.set_socketRetryLimit(1)
-                data = client.status()
-                if data and isinstance(data, dict) and "dps" in data and data["dps"]:
-                    return data["dps"]
-            except Exception as e:
-                logger.debug(f"Odpytanie sub-device {device_id} zakonczone bledem: {e}")
+            if not self._is_port_open(gw_ip, 6668, timeout=1.0):
+                return {}
+
+            versions_to_try = [gw_ver, 3.4, 3.3, 3.5, 3.1]
+            seen = set()
+            versions_to_try = [v for v in versions_to_try if not (v in seen or seen.add(v))]
+
+            for v in versions_to_try:
+                gw = None
+                try:
+                    gw = tinytuya.Device(gw_id, gw_ip, gw_key, version=float(v))
+                    gw.set_socketTimeout(1.5)
+                    gw.set_socketRetryLimit(1)
+                    gw.set_socketPersistent(True)
+                    sub = tinytuya.Device(device_id, cid=str(node_id).strip(), parent=gw)
+                    data = sub.status()
+                    if data and isinstance(data, dict) and "dps" in data and data["dps"]:
+                        if abs(v - gw_ver) >= 0.01:
+                            logger.info(f"Auto-wykryto wersje bramki Zigbee v{v} dla {gw_id} ({gw_ip})!")
+                            if gw_id in self.devices:
+                                self.devices[gw_id]["version"] = str(v)
+                            info["version"] = str(v)
+                            if self.on_version_detected:
+                                self.on_version_detected(gw_id, str(v))
+                                self.on_version_detected(device_id, str(v))
+                        return data["dps"]
+                except Exception as e:
+                    logger.debug(f"Odpytanie sub-device {device_id} (v{v}) zakonczone bledem: {e}")
+                finally:
+                    if gw:
+                        try:
+                            gw.close()
+                        except Exception:
+                            pass
             return {}
 
         if not ip or not local_key:
