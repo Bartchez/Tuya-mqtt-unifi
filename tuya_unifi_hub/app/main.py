@@ -346,7 +346,8 @@ async def poll_device(device_id: str):
         dps = await asyncio.to_thread(tuya_local.poll_device_status, device_id)
         if dps:
             on_local_status_update(device_id, dps)
-            return {"dps": dps, "count": len(dps)}
+            merged_dps = devices.get(device_id, {}).get("dps") or dps
+            return {"dps": merged_dps, "lan_dps": dps, "count": len(merged_dps), "lan_count": len(dps)}
         else:
             return {"dps": {}, "error": "Brak odpowiedzi od urzadzenia (sprawdz IP i Local Key)"}
     except Exception as e:

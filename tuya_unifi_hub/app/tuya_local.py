@@ -34,6 +34,9 @@ COMMON_DP_CODE_TO_IDS = {
     "temp_value_v2": ["23", "4"],
     "colour_data": ["24", "5"],
     "colour_data_v2": ["24", "5"],
+    "scene_data": ["25", "6"],
+    "scene_data_v2": ["25", "6"],
+    "countdown_1": ["26", "7"],
     # Czujniki klimatu / stacje pogodowe / nawilżacze
     "temp_current": ["1", "18", "3"],
     "humidity_value": ["2", "19"],
@@ -88,6 +91,10 @@ class TuyaLocalManager:
             for cid in candidates:
                 if cid in available_dps:
                     return cid
+            # Jeśli urządzenie (np. żarówka Zigbee) raportuje DPS "1" zamiast "20", użyj 1-based numeracji światła
+            if "1" in available_dps and "20" not in available_dps and len(candidates) >= 2:
+                if candidates[0] in ("20", "21", "22", "23", "24", "25", "26"):
+                    return candidates[1]
         if candidates:
             return candidates[0]
         return key_str
